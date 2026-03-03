@@ -160,6 +160,18 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
         # ── TTS: generate audio for the translated text and stream it back ──
         try:
             tts_result = await generate_tts_audio(translated, target_lang)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 402:
+                logger.error(
+                    "TTS failed (402 Payment Required) — the configured voice ID "
+                    "requires a paid ElevenLabs plan. Remove ELEVENLABS_VOICE_ID_EN, "
+                    "ELEVENLABS_VOICE_ID_DE, and ELEVENLABS_VOICE_ID from your .env "
+                    "to use the free built-in default voice."
+                )
+            else:
+                logger.error("TTS generation failed (HTTP %s): %s", status, exc)
+            tts_result = None
         except Exception as exc:  # noqa: BLE001
             logger.error("TTS generation failed: %s", exc)
             tts_result = None
