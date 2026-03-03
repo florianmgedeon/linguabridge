@@ -61,10 +61,16 @@ async def stream_to_deepgram(
     # Build the query string for the Deepgram WebSocket URL.
     # - model=nova-2       : Deepgram's best general-purpose model
     # - language=multi     : enables Deepgram's multi-language code-switching for
-    #                        streaming (DE + EN).  This is the correct streaming
-    #                        parameter for automatic language detection.
+    #                        streaming.  This is the correct streaming parameter
+    #                        for automatic language detection; it causes Deepgram
+    #                        to report channel.detected_language per utterance.
     #                        NOTE: "detect_language=true" is a pre-recorded-only
     #                        parameter and causes HTTP 400 on the live endpoint.
+    # - languages=de,en    : restrict code-switching to German + English ONLY.
+    #                        Without this, language=multi considers all supported
+    #                        languages and German regularly gets misidentified as
+    #                        Spanish/Italian (similar phoneme patterns). Restricting
+    #                        to de,en keeps detection fast and accurate.
     # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
     #       from the container header automatically.  Passing an invalid
     #       encoding value causes HTTP 400.
@@ -73,6 +79,7 @@ async def stream_to_deepgram(
     params = (
         f"?model=nova-2"
         f"&language=multi"
+        f"&languages=de,en"
         f"&interim_results=true"
         f"&smart_format=true"
     )
@@ -81,7 +88,7 @@ async def stream_to_deepgram(
 
     try:
         async with websockets.connect(url, additional_headers=headers) as dg_ws:
-            logger.info("Deepgram WebSocket connected (language=multi)")
+            logger.info("Deepgram WebSocket connected (language=multi, languages=de,en)")
 
             async def _send_audio() -> None:
                 """Pull audio chunks from the queue and forward them to Deepgram."""
