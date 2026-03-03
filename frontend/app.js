@@ -47,6 +47,11 @@ let bytesSent   = 0;
 // here.  The very next binary WebSocket frame is the corresponding MP3 audio.
 let pendingTtsHeader = null;   // set by handleTtsStart(), cleared after playback
 
+// Queue of pending TTS clips so they play sequentially without overlap.
+// Each entry: { buffer: ArrayBuffer, mime: string, id: number }
+const ttsQueue     = [];
+let   ttsPlaying   = false;   // true while an Audio element is playing
+
 // ─── DOM references ─────────────────────────────────────────────────────────
 const btnMic        = document.getElementById("btn-mic");
 const statusEl      = document.getElementById("status");
@@ -295,8 +300,7 @@ function handleTtsStart(msg) {
 /**
  * Called when the WebSocket delivers a binary frame (ArrayBuffer).
  *
- * If `pendingTtsHeader` is set, this frame is TTS audio — we convert it to
- * a Blob URL, attach it to an Audio element, and play it immediately.
+ * Pushes the audio onto a sequential playback queue so clips never overlap.
  * The object URL is revoked once playback ends to free memory.
  *
  * @param {ArrayBuffer} buffer  Raw bytes of the audio file (MP3).
@@ -310,30 +314,48 @@ function playTtsAudio(buffer) {
   const { mime, id } = pendingTtsHeader;
   pendingTtsHeader = null;   // consume the header
 
-  const blob = new Blob([buffer], { type: mime || "audio/mpeg" });
-  const url  = URL.createObjectURL(blob);
+  ttsQueue.push({ buffer, mime, id });
+  drainTtsQueue();
+}
 
+/**
+ * Starts the next queued TTS clip if none is currently playing.
+ * Each clip waits for the previous one to finish before starting.
+ */
+function drainTtsQueue() {
+  if (ttsPlaying || ttsQueue.length === 0) return;
+
+  ttsPlaying = true;
+  const { buffer, mime, id } = ttsQueue.shift();
+
+  const blob  = new Blob([buffer], { type: mime || "audio/mpeg" });
+  const url   = URL.createObjectURL(blob);
   const audio = new Audio(url);
 
   // Route to the output device the user selected (if the browser supports it).
   const outputDeviceId = selectOutput.value;
   if (outputDeviceId && typeof audio.setSinkId === "function") {
     audio.setSinkId(outputDeviceId).catch(err => {
-      // setSinkId can fail if the device is no longer available; ignore it.
       console.warn(`TTS setSinkId failed: ${err.message}`);
     });
   }
 
-  audio.addEventListener("ended",  () => URL.revokeObjectURL(url));
-  audio.addEventListener("error",  () => {
-    console.warn(`TTS audio (id=${id}) failed to play`);
+  const onDone = () => {
     URL.revokeObjectURL(url);
+    ttsPlaying = false;
+    drainTtsQueue();   // play the next clip in the queue
+  };
+
+  audio.addEventListener("ended", onDone);
+  audio.addEventListener("error", () => {
+    console.warn(`TTS audio (id=${id}) failed to play`);
+    onDone();
   });
 
   audio.play().catch(err => {
     // Autoplay can be blocked by the browser if no user gesture has occurred.
     console.warn(`TTS autoplay blocked (id=${id}): ${err.message}`);
-    URL.revokeObjectURL(url);
+    onDone();
   });
 }
 
@@ -367,6 +389,8 @@ function startStreaming() {
 
   // Reset TTS state for the new session.
   pendingTtsHeader = null;
+  ttsQueue.length  = 0;
+  ttsPlaying       = false;
 
   // Read the selected language and append it as a query parameter so the
   // backend knows which language to tell Deepgram to transcribe.
