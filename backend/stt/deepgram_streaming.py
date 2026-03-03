@@ -60,8 +60,9 @@ async def stream_to_deepgram(
     # Build the query string for the Deepgram WebSocket URL.
     # - model=nova-2          : Deepgram's best general-purpose model
     # - detect_language=true  : let Deepgram automatically detect the spoken language
-    # - language=multi        : required when using detect_language; tells Deepgram
-    #                           not to restrict to a single fixed language
+    #                           NOTE: do NOT also set a fixed "language=" parameter
+    #                           when detect_language=true is active — Deepgram returns
+    #                           HTTP 400 if both are present.
     # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
     #       from the container header automatically.  Passing an invalid
     #       encoding value causes HTTP 400.
@@ -70,7 +71,6 @@ async def stream_to_deepgram(
     params = (
         f"?model=nova-2"
         f"&detect_language=true"
-        f"&language=multi"
         f"&interim_results=true"
         f"&smart_format=true"
     )
