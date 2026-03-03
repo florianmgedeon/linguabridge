@@ -13,8 +13,9 @@ How it works (plain English):
 5. We call a callback function for each message so the FastAPI handler can
    forward it back to the browser.
 
-Language detection is handled automatically by Deepgram (detect_language=true).
-Detection is restricted to German ("de") and English ("en").
+Language detection is handled automatically by Deepgram's multi-language
+code-switching feature (language=multi), which returns the detected language
+per utterance.  Detection is restricted to German ("de") and English ("en").
 """
 
 import asyncio
@@ -58,19 +59,20 @@ async def stream_to_deepgram(
         return
 
     # Build the query string for the Deepgram WebSocket URL.
-    # - model=nova-2          : Deepgram's best general-purpose model
-    # - detect_language=true  : let Deepgram automatically detect the spoken language
-    #                           NOTE: do NOT also set a fixed "language=" parameter
-    #                           when detect_language=true is active — Deepgram returns
-    #                           HTTP 400 if both are present.
+    # - model=nova-2       : Deepgram's best general-purpose model
+    # - language=multi     : enables Deepgram's multi-language code-switching for
+    #                        streaming (DE + EN).  This is the correct streaming
+    #                        parameter for automatic language detection.
+    #                        NOTE: "detect_language=true" is a pre-recorded-only
+    #                        parameter and causes HTTP 400 on the live endpoint.
     # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
     #       from the container header automatically.  Passing an invalid
     #       encoding value causes HTTP 400.
-    # - interim_results  : send partial transcripts as the user speaks
-    # - smart_format     : add punctuation and capitalisation automatically
+    # - interim_results    : send partial transcripts as the user speaks
+    # - smart_format       : add punctuation and capitalisation automatically
     params = (
         f"?model=nova-2"
-        f"&detect_language=true"
+        f"&language=multi"
         f"&interim_results=true"
         f"&smart_format=true"
     )
@@ -79,7 +81,7 @@ async def stream_to_deepgram(
 
     try:
         async with websockets.connect(url, additional_headers=headers) as dg_ws:
-            logger.info("Deepgram WebSocket connected (detect_language=true)")
+            logger.info("Deepgram WebSocket connected (language=multi)")
 
             async def _send_audio() -> None:
                 """Pull audio chunks from the queue and forward them to Deepgram."""
@@ -118,7 +120,7 @@ async def stream_to_deepgram(
                         continue
 
                     # Deepgram includes the detected language on the channel
-                    # object when detect_language=true is active.
+                    # object when language=multi is active (code-switching mode).
                     detected_language = msg.get("channel", {}).get("detected_language", "")
 
                     await on_transcript(
