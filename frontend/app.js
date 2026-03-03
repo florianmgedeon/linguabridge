@@ -250,6 +250,7 @@ function startStreaming() {
   // Reset transcript display for the new session.
   finalTranscript = "";
   transcriptFinalEl.textContent   = "";
+  transcriptFinalEl.style.color   = "";
   transcriptInterimEl.textContent = "";
   transcriptPlaceholder.style.display = "none";
 
@@ -297,6 +298,12 @@ function startStreaming() {
       const msg = JSON.parse(event.data);
       if (msg.type === "transcript") {
         handleTranscript(msg);
+      } else if (msg.type === "error") {
+        // Show backend errors (e.g. missing API key) in the transcript panel
+        transcriptPlaceholder.style.display = "none";
+        transcriptInterimEl.textContent = "";
+        transcriptFinalEl.textContent   = msg.message || "Unknown server error";
+        transcriptFinalEl.style.color   = "#b00020";
       }
     } catch (err) {
       console.warn("Failed to parse WebSocket message:", err);

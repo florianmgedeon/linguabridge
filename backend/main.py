@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 
 from dotenv import load_dotenv
@@ -58,6 +59,24 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
     # Sanitise the language code so we only pass known values to Deepgram.
     language = lang if lang in _ALLOWED_LANGUAGES else "en"
     logger.info("WebSocket connection opened (language=%s)", language)
+
+    # Fail fast and visibly if the API key is not configured.
+    # The browser will show this message in the transcript panel.
+    if not os.environ.get("DEEPGRAM_API_KEY"):
+        logger.error(
+            "DEEPGRAM_API_KEY is not set. "
+            "Copy .env.example to .env and add your key, then restart the server."
+        )
+        await websocket.send_json({
+            "type": "error",
+            "message": (
+                "⚠️ DEEPGRAM_API_KEY is not set on the server. "
+                "Create a .env file in the project root with "
+                "DEEPGRAM_API_KEY=your_key_here and restart the backend."
+            ),
+        })
+        await websocket.close()
+        return
 
     total_bytes = 0
     chunk_count = 0
