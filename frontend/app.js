@@ -1,5 +1,5 @@
 /**
- * LinguaBridge – frontend audio setup (PR 1 + PR 2)
+ * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3)
  *
  * PR 1 responsibilities:
  *  1. Request microphone permission via getUserMedia
@@ -9,9 +9,13 @@
  * PR 2 additions:
  *  4. Open a WebSocket connection to the FastAPI backend
  *  5. Stream raw mic audio chunks to the backend in real-time
- *  6. Display live debug counters (chunks sent, bytes sent, backend ack)
+ *  6. Display live debug counters (chunks sent, bytes sent)
  *
- * No translation or AI logic yet – that comes in a later PR.
+ * PR 3 additions:
+ *  7. Language selector (EN / DE) passed to the backend as ?lang=
+ *  8. Display live transcripts sent back by the backend (partial + final)
+ *
+ * No translation or TTS yet – that comes in a later PR.
  */
 
 // Global handle to the active MediaStream.
@@ -46,7 +50,15 @@ const wsStatusEl        = document.getElementById("ws-status");
 const streamStatusEl    = document.getElementById("stream-status");
 const cntChunks         = document.getElementById("cnt-chunks");
 const cntBytes          = document.getElementById("cnt-bytes");
-const cntBackendBytes   = document.getElementById("cnt-backend-bytes");
+const selectLang        = document.getElementById("select-lang");
+
+// Transcript display elements (PR 3)
+const transcriptFinalEl   = document.getElementById("transcript-final");
+const transcriptInterimEl = document.getElementById("transcript-interim");
+const transcriptPlaceholder = document.getElementById("transcript-placeholder");
+
+// Accumulated final-transcript text for the current session.
+let finalTranscript = "";
 
 // ─── Microphone permission ───────────────────────────────────────────────────
 
@@ -160,29 +172,62 @@ selectOutput.addEventListener("change", async () => {
 // ─── WebSocket URL helper ────────────────────────────────────────────────────
 
 /**
- * Builds the WebSocket URL for the backend.
+ * Builds the WebSocket URL for the backend, including the language parameter.
  *
- * - On localhost  → ws://localhost:8000/ws/audio
- * - In Codespaces → wss://<codespace-name>-8000.app.github.dev/ws/audio
+ * - On localhost  → ws://localhost:8000/ws/audio?lang=en
+ * - In Codespaces → wss://<codespace-name>-8000.app.github.dev/ws/audio?lang=en
  *   (GitHub Codespaces forwards each port as its own subdomain; we swap
  *   the frontend port in the hostname for the backend port 8000)
  *
+ * @param {string} lang - "en" or "de"
  * @returns {string} The full WebSocket URL to connect to.
  */
-function buildWsUrl() {
+function buildWsUrl(lang = "en") {
   const host     = window.location.hostname;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const query    = `?lang=${encodeURIComponent(lang)}`;
 
   // Local development
   if (host === "localhost" || host === "127.0.0.1") {
-    return "ws://localhost:8000/ws/audio";
+    return `ws://localhost:8000/ws/audio${query}`;
   }
 
   // GitHub Codespaces — replace the frontend port number in the subdomain
   // with the backend port (8000).  The frontend is typically served on port
   // 3000, producing a hostname like "<name>-3000.app.github.dev".
   const wsHost = host.replace(/(-\d+)(\.app\.github\.dev)$/, "-8000$2");
-  return `${protocol}//${wsHost}/ws/audio`;
+  return `${protocol}//${wsHost}/ws/audio${query}`;
+}
+
+// ─── Transcript display (PR 3) ───────────────────────────────────────────────
+
+/**
+ * Called each time the backend forwards a Deepgram transcript event.
+ *
+ * Deepgram sends two kinds of results:
+ *  - Interim (is_final = false): words recognised so far; may change.
+ *    → shown in grey/italic as the user speaks.
+ *  - Final   (is_final = true):  a stable chunk of speech.
+ *    → appended to the permanent transcript in black text.
+ *
+ * @param {{ type: string, text: string, is_final: boolean }} msg
+ */
+function handleTranscript(msg) {
+  // Hide the placeholder hint once we get real text.
+  transcriptPlaceholder.style.display = "none";
+
+  if (msg.is_final) {
+    // Append the finalised text (add a space separator if needed).
+    if (finalTranscript && !finalTranscript.endsWith(" ")) {
+      finalTranscript += " ";
+    }
+    finalTranscript += msg.text;
+    transcriptFinalEl.textContent   = finalTranscript + " ";
+    transcriptInterimEl.textContent = "";
+  } else {
+    // Show the partial recognition in italics beside the stable text.
+    transcriptInterimEl.textContent = msg.text;
+  }
 }
 
 // ─── Streaming (PR 2) ────────────────────────────────────────────────────────
@@ -202,7 +247,15 @@ function startStreaming() {
   bytesSent  = 0;
   updateCounters();
 
-  const wsUrl = buildWsUrl();
+  // Reset transcript display for the new session.
+  finalTranscript = "";
+  transcriptFinalEl.textContent   = "";
+  transcriptInterimEl.textContent = "";
+  transcriptPlaceholder.style.display = "none";
+
+  // Read the selected language and append it as a query parameter so the
+  // backend knows which language to tell Deepgram to transcribe.
+  const wsUrl = buildWsUrl(selectLang ? selectLang.value : "en");
   setWsStatus("waiting", `WS: connecting to ${wsUrl}…`);
 
   // Stamp this connection attempt; stale handlers from the previous socket
@@ -237,13 +290,13 @@ function startStreaming() {
     btnStop.disabled  = true;
   });
 
-  // Handle acknowledgement messages sent back by the backend
+  // Handle messages sent back by the backend (transcripts from Deepgram)
   socket.addEventListener("message", (event) => {
     if (wsGeneration !== myGen) return;
     try {
       const msg = JSON.parse(event.data);
-      if (msg.type === "ack") {
-        cntBackendBytes.textContent = msg.bytes_received;
+      if (msg.type === "transcript") {
+        handleTranscript(msg);
       }
     } catch (err) {
       console.warn("Failed to parse WebSocket message:", err);
@@ -301,6 +354,12 @@ function stopStreaming() {
   setWsStatus("waiting", "WS: disconnected");
   btnStart.disabled = false;
   btnStop.disabled  = true;
+
+  // Clear the interim text; keep the final transcript visible.
+  transcriptInterimEl.textContent = "";
+  if (!finalTranscript) {
+    transcriptPlaceholder.style.display = "";
+  }
 }
 
 btnStart.addEventListener("click", startStreaming);

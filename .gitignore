@@ -13,3 +13,6 @@ env/
 
 # Node (for any future frontend tooling)
 node_modules/
+
+# Environment variables — never commit real keys
+.env
