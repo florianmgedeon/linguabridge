@@ -1,8 +1,17 @@
+import asyncio
 import logging
+import os
 import time
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+from backend.stt.deepgram_streaming import stream_to_deepgram
+
+# Load environment variables from .env (if it exists).
+# This is how we keep the Deepgram API key off of GitHub.
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,6 +27,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Languages the caller may request.  Any other value falls back to English.
+_ALLOWED_LANGUAGES = {"en", "de"}
+
 
 @app.get("/")
 def read_root():
@@ -26,26 +38,67 @@ def read_root():
 
 
 @app.websocket("/ws/audio")
-async def audio_stream(websocket: WebSocket):
+async def audio_stream(websocket: WebSocket, lang: str = "en"):
     """
     Receives raw audio chunks from the browser over WebSocket.
 
-    For each chunk it:
-    - Counts the bytes received
-    - Logs bytes/sec to the terminal (once per second) so you can
-      see data flowing without opening DevTools
-    - Sends back a small JSON acknowledgement so the browser can
-      display a live "backend bytes received" counter
+    What this endpoint does (step by step):
+    1. Accepts the WebSocket connection from the browser.
+    2. Opens a second WebSocket connection to Deepgram's cloud STT service.
+    3. Every audio chunk the browser sends is forwarded to Deepgram.
+    4. Deepgram replies with live transcripts (partial + final).
+    5. Those transcripts are sent back to the browser as JSON messages.
 
-    No transcription or translation yet – this is pure transport.
+    Query parameters
+    ----------------
+    lang : str  ("en" or "de", default "en")
+        The language the user is speaking.  Passed directly to Deepgram.
     """
     await websocket.accept()
-    logger.info("WebSocket connection opened")
+
+    # Sanitise the language code so we only pass known values to Deepgram.
+    language = lang if lang in _ALLOWED_LANGUAGES else "en"
+    logger.info("WebSocket connection opened (language=%s)", language)
+
+    # Fail fast and visibly if the API key is not configured.
+    # The browser will show this message in the transcript panel.
+    if not os.environ.get("DEEPGRAM_API_KEY"):
+        logger.error(
+            "DEEPGRAM_API_KEY is not set. "
+            "Copy .env.example to .env and add your key, then restart the server."
+        )
+        await websocket.send_json({
+            "type": "error",
+            "message": (
+                "⚠️ DEEPGRAM_API_KEY is not set on the server. "
+                "Create a .env file in the project root with "
+                "DEEPGRAM_API_KEY=your_key_here and restart the backend."
+            ),
+        })
+        await websocket.close()
+        return
 
     total_bytes = 0
     chunk_count = 0
     window_start = time.monotonic()
     window_bytes = 0
+
+    # A queue that bridges the browser-receive loop and the Deepgram-send loop.
+    # The main loop puts audio bytes here; stream_to_deepgram reads from it.
+    audio_queue: asyncio.Queue = asyncio.Queue()
+
+    async def forward_transcript(transcript: dict) -> None:
+        """Send a Deepgram transcript event back to the browser."""
+        try:
+            await websocket.send_json(transcript)
+        except WebSocketDisconnect:
+            logger.debug("Browser disconnected before transcript could be sent")
+
+    # Start the Deepgram streaming task in the background so it runs
+    # concurrently with receiving audio from the browser.
+    dg_task = asyncio.create_task(
+        stream_to_deepgram(audio_queue, forward_transcript, language=language)
+    )
 
     try:
         while True:
@@ -67,15 +120,15 @@ async def audio_stream(websocket: WebSocket):
                 window_bytes = 0
                 window_start = now
 
-            # Acknowledge the chunk so the browser can show live stats
-            await websocket.send_json({
-                "type": "ack",
-                "chunks_received": chunk_count,
-                "bytes_received": total_bytes,
-            })
+            # Forward the audio chunk to Deepgram via the queue.
+            await audio_queue.put(data)
 
     except WebSocketDisconnect:
         logger.info(
             "WebSocket closed — received %d bytes in %d chunks",
             total_bytes, chunk_count,
         )
+    finally:
+        # Signal the Deepgram task to close gracefully, then wait for it.
+        await audio_queue.put(None)
+        await dg_task

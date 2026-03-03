@@ -62,6 +62,32 @@
     .counters { font-size: 0.9rem; color: #444; margin-top: 4px; }
     .counters p { margin: 4px 0; }
     .counters span { font-weight: bold; color: #1a73e8; }
+
+    /* ── Transcript display ─────────────────────────────────────────── */
+    #transcript-box {
+      min-height: 80px;
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 1rem;
+      line-height: 1.5;
+      margin-top: 8px;
+      word-wrap: break-word;
+    }
+    /* Final transcript text */
+    #transcript-final {
+      color: #222;
+    }
+    /* Interim (partial) text shown in a lighter colour */
+    #transcript-interim {
+      color: #888;
+      font-style: italic;
+    }
+    #transcript-placeholder {
+      color: #bbb;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -74,6 +100,13 @@
   </div>
 
   <div class="card">
+    <!-- Language selector — shown before starting so the user picks EN or DE -->
+    <label for="select-lang">Speaking language</label>
+    <select id="select-lang">
+      <option value="en">🇬🇧 English</option>
+      <option value="de">🇩🇪 Deutsch (German)</option>
+    </select>
+
     <div class="btn-row">
       <button id="btn-start" disabled>Start Streaming</button>
       <button id="btn-stop"  disabled>Stop Streaming</button>
@@ -83,7 +116,14 @@
     <div class="counters">
       <p>Chunks sent: <span id="cnt-chunks">0</span></p>
       <p>Bytes sent: <span id="cnt-bytes">0</span></p>
-      <p>Backend bytes received: <span id="cnt-backend-bytes">0</span></p>
+    </div>
+  </div>
+
+  <!-- Live transcript panel -->
+  <div class="card">
+    <label>Live Transcript</label>
+    <div id="transcript-box" role="log" aria-live="polite" aria-label="Live transcript">
+      <span id="transcript-final"></span><span id="transcript-interim"></span><span id="transcript-placeholder">Start streaming to see live transcription here…</span>
     </div>
   </div>
 

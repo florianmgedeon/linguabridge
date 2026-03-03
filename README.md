@@ -1,8 +1,6 @@
 # LinguaBridge
 
-LinguaBridge is a locally hosted web application (GitHub Codespaces + browser access via forwarded localhost URL) that translates between **German ↔ English** in near real-time.
-
-This repo currently implements **PR 1** (full-stack scaffold + mic permission) and **PR 2** (real-time audio streaming over WebSocket). No AI logic yet.
+LinguaBridge is a locally hosted web application (GitHub Codespaces + browser) that transcribes speech in **English** and **German** in near real-time using [Deepgram](https://deepgram.com/) streaming STT. Translation and TTS are coming in future PRs.
 
 ---
 
@@ -11,109 +9,166 @@ This repo currently implements **PR 1** (full-stack scaffold + mic permission) a
 ```
 linguabridge/
 ├── backend/
-│   ├── main.py           ← FastAPI server (HTTP + WebSocket)
-│   └── requirements.txt  ← Python dependencies
+│   ├── main.py                    ← FastAPI server (HTTP + WebSocket)
+│   ├── requirements.txt           ← Python dependencies
+│   └── stt/
+│       └── deepgram_streaming.py  ← Deepgram Streaming STT client
 ├── frontend/
-│   ├── index.html        ← Browser UI
-│   └── app.js            ← Microphone, device, and streaming logic
+│   ├── index.html                 ← Browser UI
+│   └── app.js                     ← Microphone, device, and streaming logic
+├── .env.example                   ← Template for environment variables
 └── README.md
 ```
 
 ---
 
-## How to Run & Test (Beginner-Friendly Guide)
+## How to Run & Test (Step-by-Step)
+
+> **Both options below require a Deepgram API key.**
+> Sign up at [console.deepgram.com](https://console.deepgram.com) — a free tier is available.
+
+---
 
 ### Option A — GitHub Codespaces (recommended)
 
 > Codespaces gives you a full Linux computer inside your browser. No local install needed.
 
-1. **Open a Codespace**
-   - On the repository page on GitHub, click the green **Code** button.
-   - Choose the **Codespaces** tab → **Create codespace on main**.
-   - Wait ~1 minute for it to start.
+#### Step 1 — Open a Codespace
 
-2. **Install Python dependencies**
+- On the repository page on GitHub, click the green **Code** button.
+- Choose the **Codespaces** tab → **Create codespace on main**.
+- Wait ~1 minute for the environment to start.
 
-   In the terminal at the bottom of the Codespace, run:
+#### Step 2 — Create your `.env` file with the Deepgram API key
 
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
+In the Codespace terminal, run these two commands **exactly as shown** (replace `YOUR_KEY_HERE` with your real Deepgram key):
 
-3. **Start the backend server**
+```bash
+cp .env.example .env
+```
 
-   ```bash
-   uvicorn backend.main:app --host 0.0.0.0 --port 8000
-   ```
+Then open the `.env` file (click it in the file explorer on the left) and change:
 
-   You should see output like:
-   ```
-   INFO:     Uvicorn running on http://0.0.0.0:8000
-   ```
+```
+DEEPGRAM_API_KEY=your_deepgram_api_key_here
+```
 
-4. **Forward port 8000**
-   - Look at the **Ports** tab at the bottom of the Codespace (next to Terminal).
-   - Find port **8000** → right-click → **Port Visibility** → set to **Public** (this lets the browser make a secure WebSocket connection).
-   - Click the 🌐 globe icon to confirm you see `{"status": "LinguaBridge running"}`.
-   - Also make sure port **8000** is set to **Public** in the Codespace Ports tab — the WebSocket connection can't reach a private port from the browser.
+to your real key, e.g.:
 
-5. **Open the frontend**
-   - In the Codespace terminal, open a **second terminal** (click the `+` icon).
-   - Run:
+```
+DEEPGRAM_API_KEY=abc123yourkeyhere
+```
 
-     ```bash
-     cd frontend
-     python3 -m http.server 3000
-     ```
+Save the file. **This file is in `.gitignore` — it will never be committed to GitHub.**
 
-   - Back in the **Ports** tab, forward port **3000** and open it in the browser.
-   - The LinguaBridge UI will appear.
+> 💡 **Why is this needed?** The backend sends your audio to Deepgram's servers for transcription. Deepgram requires an API key to verify who is making the request. We keep it in `.env` so it never accidentally ends up on GitHub.
 
-6. **Test microphone & streaming**
-   - Click **Enable Microphone** — the browser will ask for permission. Click *Allow*.
-   - The status indicator should change to **Mic: granted ✓** and the **Start Streaming** button becomes clickable.
-   - Click **Start Streaming**.
-     - The **WS** badge should turn green: **WS: connected ✓**
-     - The **Streaming** badge should say **Streaming: on 🔴**
-     - The counters (**Chunks sent**, **Bytes sent**, **Backend bytes received**) should increment every ~250 ms.
-   - Switch to the terminal running the backend and watch bytes/sec log lines appear.
-   - Click **Stop Streaming** to end the session.
+#### Step 3 — Install Python dependencies
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+#### Step 4 — Start the backend server
+
+Make sure you are in the **project root** (the `linguabridge/` folder, not inside `backend/`). Run:
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+You should see:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+> ✅ The server has loaded your `.env` file automatically. If `DEEPGRAM_API_KEY` is missing, the browser will show a red error message when you start streaming.
+
+#### Step 5 — Make port 8000 public
+
+- Look at the **Ports** tab at the bottom of the Codespace (next to the Terminal).
+- Find **port 8000** → right-click → **Port Visibility** → set to **Public**.
+- Click the 🌐 globe icon next to port 8000. You should see `{"status": "LinguaBridge running"}` — that confirms the backend is up.
+
+#### Step 6 — Open the frontend
+
+Open a **second terminal** (click the `+` icon next to the Terminal tab). Then run:
+
+```bash
+cd frontend
+python3 -m http.server 3000
+```
+
+> ⚠️ Make sure you run these commands in a **new terminal**, starting from the project root. If you get `bash: cd: frontend: No such file or directory`, you may already be inside the `frontend/` folder — just run `python3 -m http.server 3000` without the `cd` step.
+
+Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it in the browser. The LinguaBridge UI will appear.
+
+#### Step 7 — Test live transcription
+
+1. Click **Enable Microphone** — the browser will ask for permission. Click *Allow*.
+2. The status indicator changes to **Mic: granted ✓** and the **Start Streaming** button becomes clickable.
+3. Select your speaking language: **English** or **Deutsch (German)**.
+4. Click **Start Streaming**.
+   - The **WS** badge turns green: **WS: connected ✓**
+   - The **Streaming** badge shows **Streaming: on 🔴**
+5. Start talking — you will see words appear live in the **Live Transcript** box:
+   - *Grey/italic* text = Deepgram's best guess while you're still speaking
+   - **Black** text = finalised words (Deepgram is confident)
+6. Click **Stop Streaming** when done.
 
 ---
 
 ### Option B — Run locally on your own computer
 
-> You need Python 3.9+ installed. Check with `python --version`.
+> You need Python 3.9+. Check with `python --version`.
 
-1. **Clone the repo** (if you haven't already):
+1. **Clone the repo**:
 
    ```bash
    git clone https://github.com/florianmgedeon/linguabridge.git
    cd linguabridge
    ```
 
-2. **Install dependencies**:
+2. **Create your `.env` file**:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Open `.env` and replace `your_deepgram_api_key_here` with your real Deepgram key.
+
+3. **Install dependencies**:
 
    ```bash
    pip install -r backend/requirements.txt
    ```
 
-3. **Start the backend**:
+4. **Start the backend** (from the project root):
 
    ```bash
    uvicorn backend.main:app --host 0.0.0.0 --port 8000
    ```
 
-4. **Open the frontend** — in a new terminal window:
+5. **Open the frontend** — in a new terminal, from the project root:
 
    ```bash
    cd frontend
    python3 -m http.server 3000
    ```
 
-5. **Open your browser** and go to `http://localhost:3000`
+6. Open `http://localhost:3000` in your browser and follow Step 7 above.
 
-6. **Test** the same way as step 6 above (mic permission → Start Streaming → watch counters).
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Red error in transcript box: *DEEPGRAM_API_KEY is not set* | Create `.env` from `.env.example` and add your key, then restart the backend |
+| `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
+| Transcript box stays empty after speaking | Check the backend terminal for error messages; confirm the key in `.env` is correct |
+| WS error badge | The backend is not running, or port 8000 is not set to Public in Codespaces |
+| Mic denied | Refresh the page and click *Allow* when the browser asks for microphone permission |
 
 ---
 
@@ -122,18 +177,18 @@ linguabridge/
 | Method    | Path        | Description |
 |-----------|-------------|-------------|
 | GET       | `/`         | Health-check: `{"status": "LinguaBridge running"}` |
-| WebSocket | `/ws/audio` | Receives binary audio chunks; replies with `{"type":"ack","chunks_received":N,"bytes_received":N}` |
+| WebSocket | `/ws/audio?lang=en` | Receives binary audio; forwards to Deepgram; replies with `{"type":"transcript",...}` or `{"type":"error",...}` |
+
+Supported `lang` values: `en` (English), `de` (German).
 
 ---
 
 ## What's Coming Next
 
-- Speech-to-text (transcription) — PR 3
-- Direction switching (DE→EN or EN→DE)
-- Translation via AI API
-- Text-to-speech output
+- Translation (DE→EN or EN→DE) via AI API — PR 4
+- Text-to-speech output — PR 5
 - Ear routing (left/right channel per speaker)
 
 ---
 
-*LinguaBridge ist eine lokal gehostete Webanwendung (GitHub Codespace + Zugriff über localhost im Browser), die ausschließlich Deutsch ↔ Englisch in nahezu Echtzeit übersetzt.*
+*LinguaBridge ist eine lokal gehostete Webanwendung (GitHub Codespace + Browser), die Deutsch ↔ Englisch in nahezu Echtzeit transkribiert und übersetzt.*
