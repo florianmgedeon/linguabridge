@@ -88,6 +88,35 @@
       color: #bbb;
       font-style: italic;
     }
+
+    /* ── Translation display ────────────────────────────────────────── */
+    #translation-box {
+      min-height: 60px;
+      background: #f0f7ff;
+      border: 1px solid #c3daf9;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 1rem;
+      line-height: 1.6;
+      margin-top: 8px;
+      word-wrap: break-word;
+    }
+    #translation-placeholder {
+      color: #bbb;
+      font-style: italic;
+    }
+    /* Each original/translated pair */
+    #translation-log p {
+      margin: 2px 0;
+    }
+    .translation-original {
+      color: #444;
+    }
+    .translation-translated {
+      color: #1a73e8;
+      font-weight: bold;
+      margin-bottom: 8px !important;
+    }
   </style>
 </head>
 <body>
@@ -124,6 +153,15 @@
     <label>Live Transcript</label>
     <div id="transcript-box" role="log" aria-live="polite" aria-label="Live transcript">
       <span id="transcript-final"></span><span id="transcript-interim"></span><span id="transcript-placeholder">Start streaming to see live transcription here…</span>
+    </div>
+  </div>
+
+  <!-- Translation panel (PR 4) -->
+  <div class="card">
+    <label>Translation (EN ↔ DE)</label>
+    <div id="translation-box" role="log" aria-live="polite" aria-label="Translation output">
+      <span id="translation-placeholder">Translations will appear here after each spoken sentence…</span>
+      <div id="translation-log"></div>
     </div>
   </div>
 

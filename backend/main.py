@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.stt.deepgram_streaming import stream_to_deepgram
+from backend.translation.openai_translate import translate_text
 
 # Load environment variables from .env (if it exists).
 # This is how we keep the Deepgram API key off of GitHub.
@@ -87,12 +88,76 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
     # The main loop puts audio bytes here; stream_to_deepgram reads from it.
     audio_queue: asyncio.Queue = asyncio.Queue()
 
+    async def _translate_and_send(text: str, source_lang: str) -> None:
+        """
+        Translate *text* and send the result back to the browser.
+
+        This runs as a background task so it never blocks the main
+        audio-receive loop — the user keeps seeing interim transcripts
+        while we wait for OpenAI to respond.
+        """
+        target_lang = "de" if source_lang == "en" else "en"
+        start = time.monotonic()
+        try:
+            translated = await translate_text(text, source_lang, target_lang)
+            logger.info(
+                "Translation (%.3fs): [%s→%s] %r → %r",
+                time.monotonic() - start,
+                source_lang,
+                target_lang,
+                text,
+                translated,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OpenAI translation error: %s", exc)
+            try:
+                await websocket.send_json({"type": "error", "message": "Translation failed"})
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        # translate_text returns None for unsupported languages or empty results.
+        if not translated:
+            return
+
+        try:
+            await websocket.send_json({
+                "type": "translation",
+                "original": text,
+                "translated": translated,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+            })
+        except WebSocketDisconnect:
+            logger.debug("Browser disconnected before translation could be sent")
+
     async def forward_transcript(transcript: dict) -> None:
-        """Send a Deepgram transcript event back to the browser."""
+        """
+        Send a Deepgram transcript event back to the browser.
+
+        For final (is_final=True) transcripts we also kick off a background
+        translation task so the WebSocket receive loop is never blocked.
+        """
         try:
             await websocket.send_json(transcript)
         except WebSocketDisconnect:
             logger.debug("Browser disconnected before transcript could be sent")
+            return
+
+        # Only translate finalised transcript chunks.
+        if not transcript.get("is_final"):
+            return
+
+        text = transcript.get("text", "").strip()
+        if not text:
+            return
+
+        # Determine the source language from the sanitised query-parameter value.
+        # `language` is already validated as "en" or "de" earlier in audio_stream.
+        source_lang = language
+
+        # Spawn translation in the background — does not block audio streaming.
+        asyncio.create_task(_translate_and_send(text, source_lang))
 
     # Start the Deepgram streaming task in the background so it runs
     # concurrently with receiving audio from the browser.

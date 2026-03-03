@@ -2,3 +2,4 @@ fastapi==0.115.12
 uvicorn[standard]==0.34.0
 websockets==14.2
 python-dotenv==1.1.1
+openai>=1.0.0

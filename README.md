@@ -11,11 +11,13 @@ linguabridge/
 ├── backend/
 │   ├── main.py                    ← FastAPI server (HTTP + WebSocket)
 │   ├── requirements.txt           ← Python dependencies
-│   └── stt/
-│       └── deepgram_streaming.py  ← Deepgram Streaming STT client
+│   ├── stt/
+│   │   └── deepgram_streaming.py  ← Deepgram Streaming STT client
+│   └── translation/
+│       └── openai_translate.py    ← OpenAI translation (EN ↔ DE)
 ├── frontend/
 │   ├── index.html                 ← Browser UI
-│   └── app.js                     ← Microphone, device, and streaming logic
+│   └── app.js                     ← Microphone, device, streaming, and translation logic
 ├── .env.example                   ← Template for environment variables
 └── README.md
 ```
@@ -39,29 +41,24 @@ linguabridge/
 - Choose the **Codespaces** tab → **Create codespace on main**.
 - Wait ~1 minute for the environment to start.
 
-#### Step 2 — Create your `.env` file with the Deepgram API key
+#### Step 2 — Create your `.env` file with API keys
 
-In the Codespace terminal, run these two commands **exactly as shown** (replace `YOUR_KEY_HERE` with your real Deepgram key):
+In the Codespace terminal, run these two commands **exactly as shown** (replace the placeholder values with your real keys):
 
 ```bash
 cp .env.example .env
 ```
 
-Then open the `.env` file (click it in the file explorer on the left) and change:
-
-```
-DEEPGRAM_API_KEY=your_deepgram_api_key_here
-```
-
-to your real key, e.g.:
+Then open the `.env` file (click it in the file explorer on the left) and fill in both keys:
 
 ```
 DEEPGRAM_API_KEY=abc123yourkeyhere
+OPENAI_API_KEY=sk-youropenapikey
 ```
 
 Save the file. **This file is in `.gitignore` — it will never be committed to GitHub.**
 
-> 💡 **Why is this needed?** The backend sends your audio to Deepgram's servers for transcription. Deepgram requires an API key to verify who is making the request. We keep it in `.env` so it never accidentally ends up on GitHub.
+> 💡 **Why two keys?** The backend sends your audio to Deepgram for transcription, and calls OpenAI to translate the results. Both services need an API key to identify who is making the request.
 
 #### Step 3 — Install Python dependencies
 
@@ -114,7 +111,10 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 5. Start talking — you will see words appear live in the **Live Transcript** box:
    - *Grey/italic* text = Deepgram's best guess while you're still speaking
    - **Black** text = finalised words (Deepgram is confident)
-6. Click **Stop Streaming** when done.
+6. After each finalised sentence, the **Translation** panel below will show:
+   - The original text labelled with its language, e.g. `[DE] Guten Morgen.`
+   - The translated text labelled with the target language, e.g. `[EN] Good morning.`
+7. Click **Stop Streaming** when done.
 
 ---
 
@@ -135,7 +135,12 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
    cp .env.example .env
    ```
 
-   Open `.env` and replace `your_deepgram_api_key_here` with your real Deepgram key.
+   Open `.env` and fill in both keys:
+
+   ```
+   DEEPGRAM_API_KEY=abc123yourkeyhere
+   OPENAI_API_KEY=sk-youropenapikey
+   ```
 
 3. **Install dependencies**:
 
@@ -165,10 +170,74 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 | Symptom | Fix |
 |---|---|
 | Red error in transcript box: *DEEPGRAM_API_KEY is not set* | Create `.env` from `.env.example` and add your key, then restart the backend |
+| "Translation failed" error in UI | Check that `OPENAI_API_KEY` is set in `.env`; restart the backend |
+| Translation panel stays empty | Verify `OPENAI_API_KEY` is set and non-empty; check server logs for errors |
+| Wrong translation direction | Check the "Speaking language" selector — it controls which language Deepgram expects |
 | `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
 | Transcript box stays empty after speaking | Check the backend terminal for error messages; confirm the key in `.env` is correct |
 | WS error badge | The backend is not running, or port 8000 is not set to Public in Codespaces |
 | Mic denied | Refresh the page and click *Allow* when the browser asks for microphone permission |
+
+---
+
+## PR4 — Translation (English ↔ German)
+
+This section explains how the automatic translation feature works.
+
+### How it works (plain English)
+
+After you speak a sentence:
+1. Deepgram transcribes your speech and marks it as **final** (the speaker has finished a chunk).
+2. The backend detects your speaking language (`en` = English, `de` = German) from the language you selected.
+3. It calls OpenAI's `gpt-4o-mini` model to translate the sentence into the other language.
+4. The translation is sent back to your browser and displayed in the **Translation** panel beneath the transcript.
+
+Translation happens **in the background** — the live transcript keeps updating while you wait for OpenAI to respond. The WebSocket never freezes.
+
+### Setup
+
+#### 1. Add your OpenAI API key
+
+```bash
+export OPENAI_API_KEY="sk-your-key-here"
+```
+
+Or add it to your `.env` file (recommended):
+
+```
+OPENAI_API_KEY=sk-your-key-here
+```
+
+#### 2. Install the new dependency
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+#### 3. Restart the backend
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+### Test Steps
+
+1. **Enable microphone** and click **Start Streaming**.
+2. **Speak German** (select "Deutsch" in the language dropdown) → you should see the English translation appear in the Translation panel below the transcript.
+3. **Speak English** (select "English" in the language dropdown) → you should see the German translation.
+4. Confirm:
+   - Interim transcript updates live while you speak (grey/italic text)
+   - Final transcript appears in black after you pause
+   - Translation appears in blue beneath the original, labelled `[EN]` or `[DE]`
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| No translation appears | Verify `OPENAI_API_KEY` is set in `.env` and restart the backend |
+| "Translation failed" error | Check the backend terminal for the full error; confirm the key is valid |
+| Wrong translation direction | Check the "Speaking language" selector matches what you are actually speaking |
+| Console shows "Unknown language" | Only `en` and `de` are supported; other languages are ignored |
 
 ---
 
@@ -185,7 +254,6 @@ Supported `lang` values: `en` (English), `de` (German).
 
 ## What's Coming Next
 
-- Translation (DE→EN or EN→DE) via AI API — PR 4
 - Text-to-speech output — PR 5
 - Ear routing (left/right channel per speaker)
 
