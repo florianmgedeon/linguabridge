@@ -2,7 +2,7 @@
 
 LinguaBridge is a locally hosted web application (GitHub Codespaces + browser access via forwarded localhost URL) that translates between **German ↔ English** in near real-time.
 
-This PR (PR 1) sets up the full-stack scaffold and implements microphone permission + audio output device selection in the browser. No AI logic yet.
+This repo currently implements **PR 1** (full-stack scaffold + mic permission) and **PR 2** (real-time audio streaming over WebSocket). No AI logic yet.
 
 ---
 
@@ -11,11 +11,11 @@ This PR (PR 1) sets up the full-stack scaffold and implements microphone permiss
 ```
 linguabridge/
 ├── backend/
-│   ├── main.py           ← FastAPI server
+│   ├── main.py           ← FastAPI server (HTTP + WebSocket)
 │   └── requirements.txt  ← Python dependencies
 ├── frontend/
 │   ├── index.html        ← Browser UI
-│   └── app.js            ← Microphone & device logic
+│   └── app.js            ← Microphone, device, and streaming logic
 └── README.md
 ```
 
@@ -53,8 +53,8 @@ linguabridge/
 
 4. **Forward port 8000**
    - Look at the **Ports** tab at the bottom of the Codespace (next to Terminal).
-   - Find port **8000** and click the 🌐 globe icon to open it in your browser.
-   - You should see: `{"status": "LinguaBridge running"}`
+   - Find port **8000** → right-click → **Port Visibility** → set to **Public** (this lets the browser make a secure WebSocket connection).
+   - Click the 🌐 globe icon to confirm you see `{"status": "LinguaBridge running"}`.
 
 5. **Open the frontend**
    - In the Codespace terminal, open a **second terminal** (click the `+` icon).
@@ -68,11 +68,15 @@ linguabridge/
    - Back in the **Ports** tab, forward port **3000** and open it in the browser.
    - The LinguaBridge UI will appear.
 
-6. **Test microphone & device selection**
+6. **Test microphone & streaming**
    - Click **Enable Microphone** — the browser will ask for permission. Click *Allow*.
-   - The status indicator should change to **Mic: granted ✓**
-   - The input/output device dropdowns will populate with your real device names.
-   - If you are using Chrome or Edge, changing the output device dropdown will switch where audio plays.
+   - The status indicator should change to **Mic: granted ✓** and the **Start Streaming** button becomes clickable.
+   - Click **Start Streaming**.
+     - The **WS** badge should turn green: **WS: connected ✓**
+     - The **Streaming** badge should say **Streaming: on 🔴**
+     - The counters (**Chunks sent**, **Bytes sent**, **Backend bytes received**) should increment every ~250 ms.
+   - Switch to the terminal running the backend and watch bytes/sec log lines appear.
+   - Click **Stop Streaming** to end the session.
 
 ---
 
@@ -108,21 +112,22 @@ linguabridge/
 
 5. **Open your browser** and go to `http://localhost:3000`
 
-6. **Test** the same way as in step 6 above.
+6. **Test** the same way as step 6 above (mic permission → Start Streaming → watch counters).
 
 ---
 
-## API Endpoints (PR 1)
+## API Endpoints
 
-| Method | Path | Response |
-|--------|------|----------|
-| GET    | `/`  | `{"status": "LinguaBridge running"}` |
+| Method    | Path        | Description |
+|-----------|-------------|-------------|
+| GET       | `/`         | Health-check: `{"status": "LinguaBridge running"}` |
+| WebSocket | `/ws/audio` | Receives binary audio chunks; replies with `{"type":"ack","chunks_received":N,"bytes_received":N}` |
 
 ---
 
 ## What's Coming Next
 
-- Speech-to-text (transcription)
+- Speech-to-text (transcription) — PR 3
 - Direction switching (DE→EN or EN→DE)
 - Translation via AI API
 - Text-to-speech output
