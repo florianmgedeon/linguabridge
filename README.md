@@ -55,6 +55,7 @@ linguabridge/
    - Look at the **Ports** tab at the bottom of the Codespace (next to Terminal).
    - Find port **8000** → right-click → **Port Visibility** → set to **Public** (this lets the browser make a secure WebSocket connection).
    - Click the 🌐 globe icon to confirm you see `{"status": "LinguaBridge running"}`.
+   - Also make sure port **8000** is set to **Public** in the Codespace Ports tab — the WebSocket connection can't reach a private port from the browser.
 
 5. **Open the frontend**
    - In the Codespace terminal, open a **second terminal** (click the `+` icon).
