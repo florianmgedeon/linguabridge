@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.stt.deepgram_streaming import stream_to_deepgram
 from backend.translation.openai_translate import translate_text
+from backend.tts.elevenlabs_tts import generate_tts_audio
 
 # Load environment variables from .env (if it exists).
 # This is how we keep the Deepgram API key off of GitHub.
@@ -89,6 +90,10 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
     # The main loop puts audio bytes here; stream_to_deepgram reads from it.
     audio_queue: asyncio.Queue = asyncio.Queue()
 
+    # Incrementing counter used to correlate tts_start headers with their
+    # binary audio frames.  A list is used so the nested closure can mutate it.
+    _tts_counter = [0]
+
     async def _translate_and_send(text: str, source_lang: str) -> None:
         """
         Translate *text* and send the result back to the browser.
@@ -135,6 +140,11 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
         if not translated:
             return
 
+        # Assign a simple incrementing ID so the frontend can match the
+        # tts_start header to the binary audio frame that follows it.
+        _tts_counter[0] += 1
+        tts_id = _tts_counter[0]
+
         try:
             await websocket.send_json({
                 "type": "translation",
@@ -145,6 +155,46 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
             })
         except WebSocketDisconnect:
             logger.debug("Browser disconnected before translation could be sent")
+            return
+
+        # ── TTS: generate audio for the translated text and stream it back ──
+        try:
+            tts_result = await generate_tts_audio(translated, target_lang)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 402:
+                logger.error(
+                    "TTS failed (402 Payment Required) — the configured voice ID "
+                    "requires a paid ElevenLabs plan. Remove ELEVENLABS_VOICE_ID_EN, "
+                    "ELEVENLABS_VOICE_ID_DE, and ELEVENLABS_VOICE_ID from your .env "
+                    "to use the free built-in default voice."
+                )
+            else:
+                logger.error("TTS generation failed (HTTP %s): %s", status, exc)
+            tts_result = None
+        except Exception as exc:  # noqa: BLE001
+            logger.error("TTS generation failed: %s", exc)
+            tts_result = None
+
+        if tts_result is not None:
+            audio_bytes, mime_type = tts_result
+            try:
+                # Send a JSON header first so the browser knows what's coming.
+                await websocket.send_json({
+                    "type": "tts_start",
+                    "audio_format": "mp3",
+                    "mime": mime_type,
+                    "target_lang": target_lang,
+                    "id": tts_id,
+                })
+                # Then send the raw MP3 bytes as a binary WebSocket frame.
+                await websocket.send_bytes(audio_bytes)
+                logger.info(
+                    "TTS sent (id=%d, lang=%s, %d bytes)",
+                    tts_id, target_lang, len(audio_bytes),
+                )
+            except WebSocketDisconnect:
+                logger.debug("Browser disconnected before TTS audio could be sent")
 
     async def forward_transcript(transcript: dict) -> None:
         """
