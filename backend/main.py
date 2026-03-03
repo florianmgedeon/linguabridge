@@ -3,6 +3,7 @@ import logging
 import os
 import time
 
+import openai as _openai
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,12 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+if not os.environ.get("OPENAI_API_KEY"):
+    logger.warning(
+        "OPENAI_API_KEY is not set — translation will be unavailable. "
+        "Set it with: export OPENAI_API_KEY=your_key_here"
+    )
 
 app = FastAPI()
 
@@ -109,9 +116,25 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
                 translated,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("OpenAI translation error: %s", exc)
+            if isinstance(exc, _openai.AuthenticationError):
+                user_msg = "Invalid OPENAI_API_KEY — verify your key at platform.openai.com/api-keys"
+                logger.error("OpenAI auth error (invalid key): %s", exc)
+            elif isinstance(exc, _openai.RateLimitError):
+                code = getattr(exc, "code", None) or ""
+                exc_str = str(exc)
+                if code == "insufficient_quota" or "exceeded your current quota" in exc_str:
+                    user_msg = (
+                        "OpenAI quota exceeded — add credits at "
+                        "platform.openai.com/settings/organization/billing"
+                    )
+                else:
+                    user_msg = "OpenAI rate limit hit — try again in a moment"
+                logger.error("OpenAI rate limit error: %s", exc)
+            else:
+                user_msg = "Translation failed"
+                logger.error("OpenAI translation error: %s", exc)
             try:
-                await websocket.send_json({"type": "translation_error", "message": "Translation failed"})
+                await websocket.send_json({"type": "translation_error", "message": user_msg})
             except Exception:  # noqa: BLE001
                 pass
             return
