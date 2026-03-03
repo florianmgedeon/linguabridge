@@ -1,15 +1,15 @@
 """
 backend/translation/openai_translate.py
 
-Translates text between English and German using the LibreTranslate API.
+Translates text between English and German using the MyMemory API.
 
 Plain-English explanation:
-- We send the text to a LibreTranslate server (free, no quota, no API key required).
+- MyMemory (https://mymemory.translated.net) is a completely free translation
+  service — no account, no API key, and no quota limits for normal use.
+- We send a simple GET request with the text and language pair and get back
+  the translated sentence.
 - The function returns the translated string, or None if translation is not
   applicable (e.g. unsupported language).
-- The server URL defaults to the public instance (https://libretranslate.com)
-  but can be overridden with the LIBRETRANSLATE_URL environment variable if
-  you want to run your own self-hosted instance.
 """
 
 import logging
@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 # Languages we support for translation.
 _SUPPORTED_LANGS = {"en", "de"}
 
-# Public LibreTranslate endpoint (no API key needed for basic usage).
-_DEFAULT_URL = "https://libretranslate.com"
+# MyMemory public translation endpoint — no API key needed.
+# Override with MYMEMORY_URL environment variable if needed (e.g. for testing).
+_DEFAULT_MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 
 # Shared async HTTP client — created once and reused for all requests to avoid
 # the overhead of opening a new TCP connection on every translation call.
@@ -40,7 +41,7 @@ def _get_http_client() -> httpx.AsyncClient:
 
 async def translate_text(text: str, source_lang: str, target_lang: str) -> str | None:
     """
-    Translate *text* from *source_lang* to *target_lang* using LibreTranslate.
+    Translate *text* from *source_lang* to *target_lang* using MyMemory.
 
     Parameters
     ----------
@@ -66,22 +67,25 @@ async def translate_text(text: str, source_lang: str, target_lang: str) -> str |
     if source_lang not in _SUPPORTED_LANGS or target_lang not in _SUPPORTED_LANGS:
         return None
 
-    base_url = os.environ.get("LIBRETRANSLATE_URL", _DEFAULT_URL).rstrip("/")
-    api_key = os.environ.get("LIBRETRANSLATE_API_KEY", "")
-
-    payload: dict = {
+    url = os.environ.get("MYMEMORY_URL", _DEFAULT_MYMEMORY_URL)
+    params = {
         "q": text,
-        "source": source_lang,
-        "target": target_lang,
-        "format": "text",
+        "langpair": f"{source_lang}|{target_lang}",
     }
-    if api_key:
-        payload["api_key"] = api_key
 
     client = _get_http_client()
-    response = await client.post(f"{base_url}/translate", json=payload)
+    response = await client.get(url, params=params)
     response.raise_for_status()
     data = response.json()
 
-    translated = data.get("translatedText", "").strip()
+    # MyMemory returns a numeric responseStatus (200 = success).
+    if data.get("responseStatus") != 200:
+        logger.warning(
+            "Translation service non-200 status %s: %s",
+            data.get("responseStatus"),
+            data.get("responseDetails"),
+        )
+        return None
+
+    translated = data.get("responseData", {}).get("translatedText", "").strip()
     return translated if translated else None

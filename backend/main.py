@@ -113,15 +113,15 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
             if isinstance(exc, httpx.HTTPStatusError):
                 status = exc.response.status_code
                 if status == 403:
-                    user_msg = "LibreTranslate: API key required — set LIBRETRANSLATE_API_KEY or use a self-hosted instance"
+                    user_msg = "Translation service: access denied — check server logs"
                 elif status == 429:
-                    user_msg = "LibreTranslate: rate limit reached — try again in a moment"
+                    user_msg = "Translation rate limit reached — try again in a moment"
                 else:
-                    user_msg = f"LibreTranslate error (HTTP {status}) — check server logs"
-                logger.error("LibreTranslate HTTP error %s: %s", status, exc)
+                    user_msg = f"Translation service error (HTTP {status}) — check server logs"
+                logger.error("Translation service HTTP error %s: %s", status, exc)
             elif isinstance(exc, httpx.TimeoutException):
-                user_msg = "Translation timed out — LibreTranslate server too slow"
-                logger.error("LibreTranslate timeout: %s", exc)
+                user_msg = "Translation timed out — try again in a moment"
+                logger.error("Translation service timeout: %s", exc)
             else:
                 user_msg = "Translation failed"
                 logger.error("Translation error: %s", exc)

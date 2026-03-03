@@ -1,6 +1,6 @@
 # LinguaBridge
 
-LinguaBridge is a locally hosted web application (GitHub Codespaces + browser) that transcribes speech in **English** and **German** in near real-time using [Deepgram](https://deepgram.com/) streaming STT and translates automatically using [LibreTranslate](https://libretranslate.com/) (free, no API key required).
+LinguaBridge is a locally hosted web application (GitHub Codespaces + browser) that transcribes speech in **English** and **German** in near real-time using [Deepgram](https://deepgram.com/) streaming STT and translates automatically using [MyMemory](https://mymemory.translated.net/) (free, no API key required).
 
 ---
 
@@ -14,7 +14,7 @@ linguabridge/
 │   ├── stt/
 │   │   └── deepgram_streaming.py  ← Deepgram Streaming STT client
 │   └── translation/
-│       └── openai_translate.py    ← LibreTranslate translation (EN ↔ DE)
+│       └── openai_translate.py    ← MyMemory translation (EN ↔ DE)
 ├── frontend/
 │   ├── index.html                 ← Browser UI
 │   └── app.js                     ← Microphone, device, streaming, and translation logic
@@ -28,7 +28,7 @@ linguabridge/
 
 > **Both options below require a Deepgram API key.**
 > Sign up at [console.deepgram.com](https://console.deepgram.com) — a free tier is available.
-> Translation uses LibreTranslate which is **free and requires no account or API key**.
+> Translation uses [MyMemory](https://mymemory.translated.net) which is **free and requires no account or API key**.
 
 ---
 
@@ -58,7 +58,7 @@ DEEPGRAM_API_KEY=abc123yourkeyhere
 
 Save the file. **This file is in `.gitignore` — it will never be committed to GitHub.**
 
-> 💡 **No OpenAI key needed!** Translation is handled by LibreTranslate — a free, open-source translation service. No account or credit card required.
+> 💡 **No API key needed for translation!** Translation is handled by MyMemory — a free, public translation service. No account or credit card required.
 
 #### Step 3 — Install Python dependencies
 
@@ -169,9 +169,9 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 | Symptom | Fix |
 |---|---|
 | Red error in transcript box: *DEEPGRAM_API_KEY is not set* | Create `.env` from `.env.example` and add your key, then restart the backend |
-| "Translation failed" in translation panel | LibreTranslate public server may be temporarily overloaded — try again in a moment |
-| "LibreTranslate: rate limit reached" | The public server throttled your requests — wait a few seconds and retry |
-| Translation panel stays empty | Check the backend terminal for errors; the public LibreTranslate server requires an internet connection from your Codespace |
+| "Translation failed" in translation panel | MyMemory server may be temporarily unavailable — try again in a moment |
+| "Translation rate limit reached" | The MyMemory server throttled your requests — wait a few seconds and retry |
+| Translation panel stays empty | Check the backend terminal for errors; MyMemory requires an internet connection from your Codespace |
 | Wrong translation direction | Check the "Speaking language" selector — it controls which language Deepgram expects |
 | `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
 | Transcript box stays empty after speaking | Check the backend terminal for error messages; confirm the key in `.env` is correct |
@@ -189,7 +189,7 @@ This section explains how the automatic translation feature works.
 After you speak a sentence:
 1. Deepgram transcribes your speech and marks it as **final** (the speaker has finished a chunk).
 2. The backend detects your speaking language (`en` = English, `de` = German) from the language you selected.
-3. It calls [LibreTranslate](https://libretranslate.com/) — a free, open-source translation API — to translate the sentence into the other language.
+3. It calls [MyMemory](https://mymemory.translated.net/) — a free, public translation API — to translate the sentence into the other language.
 4. The translation is sent back to your browser and displayed in the **Translation** panel beneath the transcript.
 
 Translation happens **in the background** — the live transcript keeps updating while you wait for the translation to come back. The WebSocket never freezes.
@@ -197,13 +197,6 @@ Translation happens **in the background** — the live transcript keeps updating
 ### Setup
 
 No API key needed! Just make sure your Deepgram key is set and the backend is running.
-
-If you want to use a self-hosted LibreTranslate server instead of the public one, add these to your `.env`:
-
-```
-LIBRETRANSLATE_URL=http://localhost:5000
-LIBRETRANSLATE_API_KEY=your_key_if_your_server_requires_one
-```
 
 #### Restart the backend
 
@@ -226,8 +219,8 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 | Problem | Solution |
 |---------|----------|
 | No translation appears | Check the backend terminal for errors; confirm the Codespace has internet access |
-| "LibreTranslate: rate limit reached" | The free public server is busy — wait a few seconds and try again |
-| "Translation timed out" | The public LibreTranslate server is slow — try again, or self-host for faster results |
+| "Translation rate limit reached" | MyMemory is temporarily throttling requests — wait a few seconds and try again |
+| "Translation timed out" | MyMemory server is slow — try again in a moment |
 | Wrong translation direction | Check the "Speaking language" selector matches what you are actually speaking |
 | Console shows "Unknown language" | Only `en` and `de` are supported; other languages are ignored |
 
