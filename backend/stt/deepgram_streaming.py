@@ -15,7 +15,8 @@ How it works (plain English):
 
 Language detection is handled automatically by Deepgram's multi-language
 code-switching feature (language=multi), which returns the detected language
-per utterance.  Detection is restricted to German ("de") and English ("en").
+per utterance via channel.detected_language and alternatives[0].languages.
+The backend normalises any detected language to "de", "en", or "unknown".
 """
 
 import asyncio
@@ -63,14 +64,14 @@ async def stream_to_deepgram(
     # - language=multi     : enables Deepgram's multi-language code-switching for
     #                        streaming.  This is the correct streaming parameter
     #                        for automatic language detection; it causes Deepgram
-    #                        to report channel.detected_language per utterance.
+    #                        to populate channel.detected_language and
+    #                        channel.alternatives[0].languages per utterance.
     #                        NOTE: "detect_language=true" is a pre-recorded-only
     #                        parameter and causes HTTP 400 on the live endpoint.
-    # - languages=de,en    : restrict code-switching to German + English ONLY.
-    #                        Without this, language=multi considers all supported
-    #                        languages and German regularly gets misidentified as
-    #                        Spanish/Italian (similar phoneme patterns). Restricting
-    #                        to de,en keeps detection fast and accurate.
+    #                        NOTE: do NOT add a "languages=" filter alongside
+    #                        language=multi — that parameter is not supported for
+    #                        streaming and causes detected_language to be returned
+    #                        as an empty string on every utterance.
     # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
     #       from the container header automatically.  Passing an invalid
     #       encoding value causes HTTP 400.
@@ -79,7 +80,6 @@ async def stream_to_deepgram(
     params = (
         f"?model=nova-2"
         f"&language=multi"
-        f"&languages=de,en"
         f"&interim_results=true"
         f"&smart_format=true"
     )
@@ -88,7 +88,7 @@ async def stream_to_deepgram(
 
     try:
         async with websockets.connect(url, additional_headers=headers) as dg_ws:
-            logger.info("Deepgram WebSocket connected (language=multi, languages=de,en)")
+            logger.info("Deepgram WebSocket connected (language=multi)")
 
             async def _send_audio() -> None:
                 """Pull audio chunks from the queue and forward them to Deepgram."""
@@ -116,19 +116,23 @@ async def stream_to_deepgram(
                     if msg.get("type") != "Results":
                         continue
 
-                    alternatives = (
-                        msg.get("channel", {})
-                        .get("alternatives", [{}])
-                    )
+                    channel = msg.get("channel", {})
+                    alternatives = channel.get("alternatives", [{}])
                     text = alternatives[0].get("transcript", "") if alternatives else ""
 
                     # Skip empty transcripts (silence / noise).
                     if not text:
                         continue
 
-                    # Deepgram includes the detected language on the channel
-                    # object when language=multi is active (code-switching mode).
-                    detected_language = msg.get("channel", {}).get("detected_language", "")
+                    # Deepgram includes the detected language on the channel object
+                    # when language=multi is active (code-switching mode).
+                    # As a fallback, also check alternatives[0].languages which
+                    # Deepgram populates with per-utterance language codes.
+                    detected_language = channel.get("detected_language", "")
+                    if not detected_language and alternatives:
+                        langs = alternatives[0].get("languages", [])
+                        if langs:
+                            detected_language = langs[0]
 
                     await on_transcript(
                         {
