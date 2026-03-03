@@ -60,13 +60,14 @@ async def stream_to_deepgram(
     # Build the query string for the Deepgram WebSocket URL.
     # - model=nova-2     : Deepgram's best general-purpose model
     # - language         : "en" or "de"
-    # - encoding=webm    : audio comes from browser MediaRecorder (WebM/Opus)
+    # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
+    #       from the container header automatically.  Passing an invalid
+    #       encoding value causes HTTP 400.
     # - interim_results  : send partial transcripts as the user speaks
     # - smart_format     : add punctuation and capitalisation automatically
     params = (
         f"?model=nova-2"
         f"&language={language}"
-        f"&encoding=webm"
         f"&interim_results=true"
         f"&smart_format=true"
     )
