@@ -1,5 +1,5 @@
 /**
- * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3)
+ * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3 + PR 4)
  *
  * PR 1 responsibilities:
  *  1. Request microphone permission via getUserMedia
@@ -15,7 +15,8 @@
  *  7. Language selector (EN / DE) passed to the backend as ?lang=
  *  8. Display live transcripts sent back by the backend (partial + final)
  *
- * No translation or TTS yet – that comes in a later PR.
+ * PR 4 additions:
+ *  9. Display EN↔DE translations returned by the backend (text only, no TTS)
  */
 
 // Global handle to the active MediaStream.
@@ -56,6 +57,10 @@ const selectLang        = document.getElementById("select-lang");
 const transcriptFinalEl   = document.getElementById("transcript-final");
 const transcriptInterimEl = document.getElementById("transcript-interim");
 const transcriptPlaceholder = document.getElementById("transcript-placeholder");
+
+// Translation display elements (PR 4)
+const translationLogEl      = document.getElementById("translation-log");
+const translationPlaceholder = document.getElementById("translation-placeholder");
 
 // Accumulated final-transcript text for the current session.
 let finalTranscript = "";
@@ -230,6 +235,37 @@ function handleTranscript(msg) {
   }
 }
 
+// ─── Translation display (PR 4) ──────────────────────────────────────────────
+
+/**
+ * Called each time the backend sends a completed translation.
+ *
+ * The backend sends:
+ *   { type: "translation", original: "...", translated: "...",
+ *     source_lang: "en"|"de", target_lang: "de"|"en" }
+ *
+ * We display each pair as two lines:
+ *   [DE] Guten Morgen.
+ *   [EN] Good morning.
+ *
+ * @param {{ original: string, translated: string, source_lang: string, target_lang: string }} msg
+ */
+function handleTranslation(msg) {
+  // Hide the "waiting" placeholder once the first translation arrives.
+  translationPlaceholder.style.display = "none";
+
+  const originalLine = document.createElement("p");
+  originalLine.className = "translation-original";
+  originalLine.textContent = `[${msg.source_lang.toUpperCase()}] ${msg.original}`;
+
+  const translatedLine = document.createElement("p");
+  translatedLine.className = "translation-translated";
+  translatedLine.textContent = `[${msg.target_lang.toUpperCase()}] ${msg.translated}`;
+
+  translationLogEl.appendChild(originalLine);
+  translationLogEl.appendChild(translatedLine);
+}
+
 // ─── Streaming (PR 2) ────────────────────────────────────────────────────────
 
 /**
@@ -253,6 +289,10 @@ function startStreaming() {
   transcriptFinalEl.style.color   = "";
   transcriptInterimEl.textContent = "";
   transcriptPlaceholder.style.display = "none";
+
+  // Reset translation display for the new session.
+  translationLogEl.innerHTML = "";
+  translationPlaceholder.style.display = "";
 
   // Read the selected language and append it as a query parameter so the
   // backend knows which language to tell Deepgram to transcribe.
@@ -298,8 +338,19 @@ function startStreaming() {
       const msg = JSON.parse(event.data);
       if (msg.type === "transcript") {
         handleTranscript(msg);
+      } else if (msg.type === "translation") {
+        handleTranslation(msg);
+      } else if (msg.type === "translation_error") {
+        // Show translation failures as a subtle notice in the translation panel.
+        // We deliberately do NOT touch the transcript box here.
+        translationPlaceholder.style.display = "none";
+        const errLine = document.createElement("p");
+        errLine.style.color = "#b00020";
+        errLine.style.fontStyle = "italic";
+        errLine.textContent = "⚠️ " + (msg.message || "Translation failed");
+        translationLogEl.appendChild(errLine);
       } else if (msg.type === "error") {
-        // Show backend errors (e.g. missing API key) in the transcript panel
+        // Show critical backend errors (e.g. missing API key) in the transcript panel
         transcriptPlaceholder.style.display = "none";
         transcriptInterimEl.textContent = "";
         transcriptFinalEl.textContent   = msg.message || "Unknown server error";
