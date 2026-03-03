@@ -340,8 +340,17 @@ function startStreaming() {
         handleTranscript(msg);
       } else if (msg.type === "translation") {
         handleTranslation(msg);
+      } else if (msg.type === "translation_error") {
+        // Show translation failures as a subtle notice in the translation panel.
+        // We deliberately do NOT touch the transcript box here.
+        translationPlaceholder.style.display = "none";
+        const errLine = document.createElement("p");
+        errLine.style.color = "#b00020";
+        errLine.style.fontStyle = "italic";
+        errLine.textContent = "⚠️ " + (msg.message || "Translation failed");
+        translationLogEl.appendChild(errLine);
       } else if (msg.type === "error") {
-        // Show backend errors (e.g. missing API key) in the transcript panel
+        // Show critical backend errors (e.g. missing API key) in the transcript panel
         transcriptPlaceholder.style.display = "none";
         transcriptInterimEl.textContent = "";
         transcriptFinalEl.textContent   = msg.message || "Unknown server error";

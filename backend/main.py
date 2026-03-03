@@ -111,7 +111,7 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
         except Exception as exc:  # noqa: BLE001
             logger.error("OpenAI translation error: %s", exc)
             try:
-                await websocket.send_json({"type": "error", "message": "Translation failed"})
+                await websocket.send_json({"type": "translation_error", "message": "Translation failed"})
             except Exception:  # noqa: BLE001
                 pass
             return
