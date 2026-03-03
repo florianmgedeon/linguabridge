@@ -13,7 +13,8 @@ How it works (plain English):
 5. We call a callback function for each message so the FastAPI handler can
    forward it back to the browser.
 
-Supported languages: "en" (English) or "de" (German).
+Language detection is handled automatically by Deepgram (detect_language=true).
+Detection is restricted to German ("de") and English ("en").
 """
 
 import asyncio
@@ -32,7 +33,6 @@ _DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 async def stream_to_deepgram(
     audio_queue: asyncio.Queue,
     on_transcript,
-    language: str = "en",
 ) -> None:
     """
     Open a WebSocket to Deepgram, relay audio chunks, and invoke
@@ -45,9 +45,9 @@ async def stream_to_deepgram(
         Put ``None`` to signal that the stream has ended.
     on_transcript : async callable
         Called with a single dict argument for every Deepgram Results message
-        that contains a non-empty transcript.
-    language : str
-        BCP-47 language code accepted by Deepgram.  We only use "en" or "de".
+        that contains a non-empty transcript.  The dict includes a
+        ``detected_language`` key with the raw language code returned by
+        Deepgram (e.g. "en", "de-DE"), or an empty string if unavailable.
     """
     api_key = os.environ.get("DEEPGRAM_API_KEY", "")
     if not api_key:
@@ -58,8 +58,10 @@ async def stream_to_deepgram(
         return
 
     # Build the query string for the Deepgram WebSocket URL.
-    # - model=nova-2     : Deepgram's best general-purpose model
-    # - language         : "en" or "de"
+    # - model=nova-2          : Deepgram's best general-purpose model
+    # - detect_language=true  : let Deepgram automatically detect the spoken language
+    # - language=multi        : required when using detect_language; tells Deepgram
+    #                           not to restrict to a single fixed language
     # NOTE: do NOT set encoding= for WebM/Opus — Deepgram reads the codec
     #       from the container header automatically.  Passing an invalid
     #       encoding value causes HTTP 400.
@@ -67,7 +69,8 @@ async def stream_to_deepgram(
     # - smart_format     : add punctuation and capitalisation automatically
     params = (
         f"?model=nova-2"
-        f"&language={language}"
+        f"&detect_language=true"
+        f"&language=multi"
         f"&interim_results=true"
         f"&smart_format=true"
     )
@@ -76,7 +79,7 @@ async def stream_to_deepgram(
 
     try:
         async with websockets.connect(url, additional_headers=headers) as dg_ws:
-            logger.info("Deepgram WebSocket connected (language=%s)", language)
+            logger.info("Deepgram WebSocket connected (detect_language=true)")
 
             async def _send_audio() -> None:
                 """Pull audio chunks from the queue and forward them to Deepgram."""
@@ -114,19 +117,23 @@ async def stream_to_deepgram(
                     if not text:
                         continue
 
+                    # Deepgram includes the detected language on the channel
+                    # object when detect_language=true is active.
+                    detected_language = msg.get("channel", {}).get("detected_language", "")
+
                     await on_transcript(
                         {
                             "type": "transcript",
                             "text": text,
                             "is_final": msg.get("is_final", False),
                             "speech_final": msg.get("speech_final", False),
-                            "language": language,
+                            "detected_language": detected_language,
                         }
                     )
 
             # Run sender and receiver concurrently until both finish.
             await asyncio.gather(_send_audio(), _receive_transcripts())
-            logger.info("Deepgram WebSocket session ended (language=%s)", language)
+            logger.info("Deepgram WebSocket session ended")
 
     except websockets.exceptions.WebSocketException as exc:
         logger.error("Deepgram WebSocket error: %s", exc)

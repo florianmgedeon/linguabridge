@@ -129,13 +129,9 @@
   </div>
 
   <div class="card">
-    <!-- Language selector — shown before starting so the user picks EN or DE -->
-    <label for="select-lang">Speaking language</label>
-    <select id="select-lang">
-      <option value="en">🇬🇧 English</option>
-      <option value="de">🇩🇪 Deutsch (German)</option>
-    </select>
-
+    <div id="detected-lang-bar" style="display:none; margin-bottom:12px; font-size:0.95rem; color:#444;">
+      Detected language: <strong id="detected-lang-value" style="color:#1a73e8;">—</strong>
+    </div>
     <div class="btn-row">
       <button id="btn-start" disabled>Start Streaming</button>
       <button id="btn-stop"  disabled>Stop Streaming</button>

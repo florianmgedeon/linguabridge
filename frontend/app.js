@@ -12,15 +12,19 @@
  *  6. Display live debug counters (chunks sent, bytes sent)
  *
  * PR 3 additions:
- *  7. Language selector (EN / DE) passed to the backend as ?lang=
- *  8. Display live transcripts sent back by the backend (partial + final)
+ *  7. Display live transcripts sent back by the backend (partial + final)
  *
  * PR 4 additions:
- *  9. Display EN↔DE translations returned by the backend (text only, no TTS)
+ *  8. Display EN↔DE translations returned by the backend (text only, no TTS)
  *
  * PR 5 additions:
- *  10. Receive `tts_start` JSON header + binary MP3 audio from the backend
- *  11. Play the MP3 audio immediately through the browser's audio engine
+ *  9. Receive `tts_start` JSON header + binary MP3 audio from the backend
+ *  10. Play the MP3 audio immediately through the browser's audio engine
+ *
+ * PR 6 additions:
+ *  11. Language is now detected automatically — no manual language selector
+ *  12. Show a "Detected language: DE / EN" indicator that updates in real-time
+ *  13. Prefix each final transcript line with [DE] or [EN]
  */
 
 // Global handle to the active MediaStream.
@@ -65,7 +69,10 @@ const wsStatusEl        = document.getElementById("ws-status");
 const streamStatusEl    = document.getElementById("stream-status");
 const cntChunks         = document.getElementById("cnt-chunks");
 const cntBytes          = document.getElementById("cnt-bytes");
-const selectLang        = document.getElementById("select-lang");
+
+// Detected language indicator (PR 6)
+const detectedLangBar   = document.getElementById("detected-lang-bar");
+const detectedLangValue = document.getElementById("detected-lang-value");
 
 // Transcript display elements (PR 3)
 const transcriptFinalEl   = document.getElementById("transcript-final");
@@ -191,31 +198,32 @@ selectOutput.addEventListener("change", async () => {
 // ─── WebSocket URL helper ────────────────────────────────────────────────────
 
 /**
- * Builds the WebSocket URL for the backend, including the language parameter.
+ * Builds the WebSocket URL for the backend.
  *
- * - On localhost  → ws://localhost:8000/ws/audio?lang=en
- * - In Codespaces → wss://<codespace-name>-8000.app.github.dev/ws/audio?lang=en
+ * - On localhost  → ws://localhost:8000/ws/audio
+ * - In Codespaces → wss://<codespace-name>-8000.app.github.dev/ws/audio
  *   (GitHub Codespaces forwards each port as its own subdomain; we swap
  *   the frontend port in the hostname for the backend port 8000)
  *
- * @param {string} lang - "en" or "de"
+ * No language parameter is needed — the backend now detects the spoken
+ * language automatically via Deepgram's detect_language feature.
+ *
  * @returns {string} The full WebSocket URL to connect to.
  */
-function buildWsUrl(lang = "en") {
+function buildWsUrl() {
   const host     = window.location.hostname;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const query    = `?lang=${encodeURIComponent(lang)}`;
 
   // Local development
   if (host === "localhost" || host === "127.0.0.1") {
-    return `ws://localhost:8000/ws/audio${query}`;
+    return "ws://localhost:8000/ws/audio";
   }
 
   // GitHub Codespaces — replace the frontend port number in the subdomain
   // with the backend port (8000).  The frontend is typically served on port
   // 3000, producing a hostname like "<name>-3000.app.github.dev".
   const wsHost = host.replace(/(-\d+)(\.app\.github\.dev)$/, "-8000$2");
-  return `${protocol}//${wsHost}/ws/audio${query}`;
+  return `${protocol}//${wsHost}/ws/audio`;
 }
 
 // ─── Transcript display (PR 3) ───────────────────────────────────────────────
@@ -227,20 +235,33 @@ function buildWsUrl(lang = "en") {
  *  - Interim (is_final = false): words recognised so far; may change.
  *    → shown in grey/italic as the user speaks.
  *  - Final   (is_final = true):  a stable chunk of speech.
- *    → appended to the permanent transcript in black text.
+ *    → appended to the permanent transcript in black text, prefixed with
+ *      the detected language label (e.g. "[DE]" or "[EN]").
  *
- * @param {{ type: string, text: string, is_final: boolean }} msg
+ * @param {{ type: string, text: string, is_final: boolean,
+ *           detected_lang?: string }} msg
  */
 function handleTranscript(msg) {
   // Hide the placeholder hint once we get real text.
   transcriptPlaceholder.style.display = "none";
 
   if (msg.is_final) {
+    // Update the detected language indicator if the backend provided one.
+    const langUpper = msg.detected_lang ? msg.detected_lang.toUpperCase() : null;
+    if (langUpper) {
+      detectedLangBar.style.display   = "";
+      detectedLangValue.textContent   = langUpper;
+    }
+
+    // Prefix the line with the language label so the user can see which
+    // language was detected, e.g. "[DE] Guten Morgen."
+    const label = langUpper ? `[${langUpper}] ` : "";
+
     // Append the finalised text (add a space separator if needed).
     if (finalTranscript && !finalTranscript.endsWith(" ")) {
       finalTranscript += " ";
     }
-    finalTranscript += msg.text;
+    finalTranscript += label + msg.text;
     transcriptFinalEl.textContent   = finalTranscript + " ";
     transcriptInterimEl.textContent = "";
   } else {
@@ -392,9 +413,13 @@ function startStreaming() {
   ttsQueue.length  = 0;
   ttsPlaying       = false;
 
-  // Read the selected language and append it as a query parameter so the
-  // backend knows which language to tell Deepgram to transcribe.
-  const wsUrl = buildWsUrl(selectLang ? selectLang.value : "en");
+  // Hide the detected language indicator until the first transcript arrives.
+  detectedLangBar.style.display = "none";
+  detectedLangValue.textContent = "—";
+
+  // Build the WebSocket URL — no language parameter needed any more because
+  // the backend detects the language automatically via Deepgram.
+  const wsUrl = buildWsUrl();
   setWsStatus("waiting", `WS: connecting to ${wsUrl}…`);
 
   // Stamp this connection attempt; stale handlers from the previous socket

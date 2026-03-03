@@ -33,6 +33,40 @@ app.add_middleware(
 # Languages the caller may request.  Any other value falls back to English.
 _ALLOWED_LANGUAGES = {"en", "de"}
 
+# ── Language detection constants ─────────────────────────────────────────────
+# Minimum transcript length / word count required before we trust the detected
+# language and switch.  Short utterances ("OK", "ja") can be ambiguous, so we
+# keep the last confirmed language for those.
+MIN_TEXT_LENGTH_FOR_LANG_CONFIRM = 8
+MIN_WORDS_FOR_LANG_CONFIRM = 2
+
+
+def normalize_language(lang_string: str) -> str:
+    """
+    Convert a Deepgram language code into a simple two-letter code.
+
+    Why this function exists (plain English):
+    Deepgram sometimes returns extended codes like "en-US" or "de-AT"
+    instead of just "en" or "de".  We strip the regional suffix so
+    the rest of the code only ever has to deal with "en", "de", or "unknown".
+
+    Examples:
+        en-US → en
+        en-GB → en
+        de-DE → de
+        de-AT → de
+        fr-FR → unknown  (unsupported language)
+        ""    → unknown
+    """
+    if not lang_string:
+        return "unknown"
+    lang = lang_string.lower()
+    if lang.startswith("de"):
+        return "de"
+    if lang.startswith("en"):
+        return "en"
+    return "unknown"
+
 
 @app.get("/")
 def read_root():
@@ -41,27 +75,28 @@ def read_root():
 
 
 @app.websocket("/ws/audio")
-async def audio_stream(websocket: WebSocket, lang: str = "en"):
+async def audio_stream(websocket: WebSocket):
     """
     Receives raw audio chunks from the browser over WebSocket.
 
     What this endpoint does (step by step):
     1. Accepts the WebSocket connection from the browser.
-    2. Opens a second WebSocket connection to Deepgram's cloud STT service.
+    2. Opens a second WebSocket connection to Deepgram's cloud STT service
+       with automatic language detection enabled.
     3. Every audio chunk the browser sends is forwarded to Deepgram.
-    4. Deepgram replies with live transcripts (partial + final).
-    5. Those transcripts are sent back to the browser as JSON messages.
-
-    Query parameters
-    ----------------
-    lang : str  ("en" or "de", default "en")
-        The language the user is speaking.  Passed directly to Deepgram.
+    4. Deepgram replies with live transcripts (partial + final) including
+       the detected language for each final chunk.
+    5. The detected language is normalised to "en" or "de" and used to
+       set the translation direction automatically (de→en or en→de).
+    6. Transcripts and translations are sent back to the browser as JSON.
     """
     await websocket.accept()
 
-    # Sanitise the language code so we only pass known values to Deepgram.
-    language = lang if lang in _ALLOWED_LANGUAGES else "en"
-    logger.info("WebSocket connection opened (language=%s)", language)
+    logger.info("WebSocket connection opened")
+
+    # Per-connection language state.  Starts as "en" so the very first
+    # utterance always produces a translation even if detection is uncertain.
+    last_confirmed_language = "en"
 
     # Fail fast and visibly if the API key is not configured.
     # The browser will show this message in the transcript panel.
@@ -200,26 +235,61 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
         """
         Send a Deepgram transcript event back to the browser.
 
-        For final (is_final=True) transcripts we also kick off a background
-        translation task so the WebSocket receive loop is never blocked.
+        For final (is_final=True) transcripts we also:
+        - Determine the confirmed language using Deepgram's detected language
+          and a stability policy (short/unclear utterances keep the last known
+          language rather than switching).
+        - Kick off a background translation task so the WebSocket receive loop
+          is never blocked.
         """
+        nonlocal last_confirmed_language
+
+        is_final = transcript.get("is_final", False)
+        text = transcript.get("text", "").strip()
+        source_lang = None
+
+        if is_final and text:
+            # Step 1: read and normalise the language Deepgram detected.
+            detected_lang_raw = transcript.get("detected_language", "")
+            normalized = normalize_language(detected_lang_raw)
+            logger.info(
+                "Deepgram detected language: %r → normalised: %r",
+                detected_lang_raw, normalized,
+            )
+
+            # Step 2: apply the stability policy.
+            # We only switch to the detected language if the utterance is long
+            # enough to be reliable.  Short clips ("OK", "ja") stay on the
+            # last confirmed language to avoid jittery direction changes.
+            if normalized in ("de", "en"):
+                word_count = len(text.split())
+                if (len(text) >= MIN_TEXT_LENGTH_FOR_LANG_CONFIRM
+                        or word_count >= MIN_WORDS_FOR_LANG_CONFIRM):
+                    last_confirmed_language = normalized
+
+            # Step 3: use the (possibly unchanged) confirmed language.
+            source_lang = last_confirmed_language
+            target_lang = "en" if source_lang == "de" else "de"
+
+            # Enrich the transcript message with language metadata so the
+            # frontend can display the detected language and direction.
+            msg_to_send = {
+                **transcript,
+                "detected_lang": source_lang,
+                "target_lang": target_lang,
+            }
+        else:
+            msg_to_send = transcript
+
         try:
-            await websocket.send_json(transcript)
+            await websocket.send_json(msg_to_send)
         except WebSocketDisconnect:
             logger.debug("Browser disconnected before transcript could be sent")
             return
 
         # Only translate finalised transcript chunks.
-        if not transcript.get("is_final"):
+        if source_lang is None:
             return
-
-        text = transcript.get("text", "").strip()
-        if not text:
-            return
-
-        # Determine the source language from the sanitised query-parameter value.
-        # `language` is already validated as "en" or "de" earlier in audio_stream.
-        source_lang = language
 
         # Spawn translation in the background — does not block audio streaming.
         asyncio.create_task(_translate_and_send(text, source_lang))
@@ -227,7 +297,7 @@ async def audio_stream(websocket: WebSocket, lang: str = "en"):
     # Start the Deepgram streaming task in the background so it runs
     # concurrently with receiving audio from the browser.
     dg_task = asyncio.create_task(
-        stream_to_deepgram(audio_queue, forward_transcript, language=language)
+        stream_to_deepgram(audio_queue, forward_transcript)
     )
 
     try:
