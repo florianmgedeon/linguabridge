@@ -23,6 +23,12 @@ let activeStream = null;
 let socket        = null;   // the WebSocket connection
 let mediaRecorder = null;   // records mic audio and fires ondataavailable
 
+// Generation counter — incremented each time a new connection is started.
+// Every event handler captures its own generation at creation time so that
+// stale handlers from a previous (failed/closed) socket are discarded even
+// if they fire after a new connection has already been initiated.
+let wsGeneration = 0;
+
 // Running counters shown in the UI
 let chunksSent  = 0;
 let bytesSent   = 0;
@@ -199,10 +205,16 @@ function startStreaming() {
   const wsUrl = buildWsUrl();
   setWsStatus("waiting", `WS: connecting to ${wsUrl}…`);
 
+  // Stamp this connection attempt; stale handlers from the previous socket
+  // will see a different generation and exit early.
+  wsGeneration++;
+  const myGen = wsGeneration;
+
   socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
 
   socket.addEventListener("open", () => {
+    if (wsGeneration !== myGen) return;
     setWsStatus("granted", "WS: connected ✓");
     startMediaRecorder();
     btnStart.disabled = true;
@@ -210,6 +222,7 @@ function startStreaming() {
   });
 
   socket.addEventListener("close", () => {
+    if (wsGeneration !== myGen) return;
     setWsStatus("waiting", "WS: disconnected");
     stopMediaRecorder();
     btnStart.disabled = false;
@@ -217,6 +230,7 @@ function startStreaming() {
   });
 
   socket.addEventListener("error", () => {
+    if (wsGeneration !== myGen) return;
     setWsStatus("denied", "WS: error — check backend is running");
     stopMediaRecorder();
     btnStart.disabled = false;
@@ -225,6 +239,7 @@ function startStreaming() {
 
   // Handle acknowledgement messages sent back by the backend
   socket.addEventListener("message", (event) => {
+    if (wsGeneration !== myGen) return;
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "ack") {
@@ -277,11 +292,13 @@ function stopMediaRecorder() {
  * Called when the user clicks "Stop Streaming".
  */
 function stopStreaming() {
+  wsGeneration++;   // invalidate any pending close/error handlers from the current socket
   stopMediaRecorder();
   if (socket) {
     socket.close();
     socket = null;
   }
+  setWsStatus("waiting", "WS: disconnected");
   btnStart.disabled = false;
   btnStop.disabled  = true;
 }
