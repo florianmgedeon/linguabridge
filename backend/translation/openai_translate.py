@@ -1,40 +1,46 @@
 """
 backend/translation/openai_translate.py
 
-Translates text between English and German using the OpenAI Chat Completions API.
+Translates text between English and German using the LibreTranslate API.
 
 Plain-English explanation:
-- We send the text to OpenAI's GPT model together with instructions that say
-  "you are a professional translator — only return the translated sentence".
+- We send the text to a LibreTranslate server (free, no quota, no API key required).
 - The function returns the translated string, or None if translation is not
   applicable (e.g. unsupported language).
+- The server URL defaults to the public instance (https://libretranslate.com)
+  but can be overridden with the LIBRETRANSLATE_URL environment variable if
+  you want to run your own self-hosted instance.
 """
 
 import logging
 import os
 
-from openai import AsyncOpenAI
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# Human-readable names used in the translation prompt.
-_LANG_NAMES = {"en": "English", "de": "German"}
+# Languages we support for translation.
+_SUPPORTED_LANGS = {"en", "de"}
 
-# A single shared async client — created once and reused for all requests.
-_client: AsyncOpenAI | None = None
+# Public LibreTranslate endpoint (no API key needed for basic usage).
+_DEFAULT_URL = "https://libretranslate.com"
+
+# Shared async HTTP client — created once and reused for all requests to avoid
+# the overhead of opening a new TCP connection on every translation call.
+_http_client: httpx.AsyncClient | None = None
 
 
-def _get_client() -> AsyncOpenAI:
-    """Return (and lazily create) the shared AsyncOpenAI client."""
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    return _client
+def _get_http_client() -> httpx.AsyncClient:
+    """Return (and lazily create) the shared async HTTP client."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=10.0)
+    return _http_client
 
 
 async def translate_text(text: str, source_lang: str, target_lang: str) -> str | None:
     """
-    Translate *text* from *source_lang* to *target_lang* using OpenAI.
+    Translate *text* from *source_lang* to *target_lang* using LibreTranslate.
 
     Parameters
     ----------
@@ -57,32 +63,25 @@ async def translate_text(text: str, source_lang: str, target_lang: str) -> str |
         return text
 
     # We only support English ↔ German.
-    if source_lang not in _LANG_NAMES or target_lang not in _LANG_NAMES:
+    if source_lang not in _SUPPORTED_LANGS or target_lang not in _SUPPORTED_LANGS:
         return None
 
-    source_name = _LANG_NAMES[source_lang]
-    target_name = _LANG_NAMES[target_lang]
+    base_url = os.environ.get("LIBRETRANSLATE_URL", _DEFAULT_URL).rstrip("/")
+    api_key = os.environ.get("LIBRETRANSLATE_API_KEY", "")
 
-    client = _get_client()
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional translator. Translate naturally and "
-                    "conversationally. Only return the translated sentence. "
-                    "Do not add explanations."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Translate from {source_name} to {target_name}:\n\n{text}",
-            },
-        ],
-        temperature=0.2,
-        max_tokens=200,
-    )
+    payload: dict = {
+        "q": text,
+        "source": source_lang,
+        "target": target_lang,
+        "format": "text",
+    }
+    if api_key:
+        payload["api_key"] = api_key
 
-    translated = response.choices[0].message.content.strip() if response.choices else ""
+    client = _get_http_client()
+    response = await client.post(f"{base_url}/translate", json=payload)
+    response.raise_for_status()
+    data = response.json()
+
+    translated = data.get("translatedText", "").strip()
     return translated if translated else None

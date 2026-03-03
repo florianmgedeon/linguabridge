@@ -1,6 +1,6 @@
 # LinguaBridge
 
-LinguaBridge is a locally hosted web application (GitHub Codespaces + browser) that transcribes speech in **English** and **German** in near real-time using [Deepgram](https://deepgram.com/) streaming STT. Translation and TTS are coming in future PRs.
+LinguaBridge is a locally hosted web application (GitHub Codespaces + browser) that transcribes speech in **English** and **German** in near real-time using [Deepgram](https://deepgram.com/) streaming STT and translates automatically using [LibreTranslate](https://libretranslate.com/) (free, no API key required).
 
 ---
 
@@ -14,7 +14,7 @@ linguabridge/
 │   ├── stt/
 │   │   └── deepgram_streaming.py  ← Deepgram Streaming STT client
 │   └── translation/
-│       └── openai_translate.py    ← OpenAI translation (EN ↔ DE)
+│       └── openai_translate.py    ← LibreTranslate translation (EN ↔ DE)
 ├── frontend/
 │   ├── index.html                 ← Browser UI
 │   └── app.js                     ← Microphone, device, streaming, and translation logic
@@ -28,6 +28,7 @@ linguabridge/
 
 > **Both options below require a Deepgram API key.**
 > Sign up at [console.deepgram.com](https://console.deepgram.com) — a free tier is available.
+> Translation uses LibreTranslate which is **free and requires no account or API key**.
 
 ---
 
@@ -49,16 +50,15 @@ In the Codespace terminal, run these two commands **exactly as shown** (replace 
 cp .env.example .env
 ```
 
-Then open the `.env` file (click it in the file explorer on the left) and fill in both keys:
+Then open the `.env` file (click it in the file explorer on the left) and fill in your Deepgram key:
 
 ```
 DEEPGRAM_API_KEY=abc123yourkeyhere
-OPENAI_API_KEY=sk-youropenapikey
 ```
 
 Save the file. **This file is in `.gitignore` — it will never be committed to GitHub.**
 
-> 💡 **Why two keys?** The backend sends your audio to Deepgram for transcription, and calls OpenAI to translate the results. Both services need an API key to identify who is making the request.
+> 💡 **No OpenAI key needed!** Translation is handled by LibreTranslate — a free, open-source translation service. No account or credit card required.
 
 #### Step 3 — Install Python dependencies
 
@@ -135,11 +135,10 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
    cp .env.example .env
    ```
 
-   Open `.env` and fill in both keys:
+   Open `.env` and fill in your Deepgram key:
 
    ```
    DEEPGRAM_API_KEY=abc123yourkeyhere
-   OPENAI_API_KEY=sk-youropenapikey
    ```
 
 3. **Install dependencies**:
@@ -170,8 +169,9 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 | Symptom | Fix |
 |---|---|
 | Red error in transcript box: *DEEPGRAM_API_KEY is not set* | Create `.env` from `.env.example` and add your key, then restart the backend |
-| "Translation failed" error in UI | Check that `OPENAI_API_KEY` is set in `.env`; restart the backend |
-| Translation panel stays empty | Verify `OPENAI_API_KEY` is set and non-empty; check server logs for errors |
+| "Translation failed" in translation panel | LibreTranslate public server may be temporarily overloaded — try again in a moment |
+| "LibreTranslate: rate limit reached" | The public server throttled your requests — wait a few seconds and retry |
+| Translation panel stays empty | Check the backend terminal for errors; the public LibreTranslate server requires an internet connection from your Codespace |
 | Wrong translation direction | Check the "Speaking language" selector — it controls which language Deepgram expects |
 | `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
 | Transcript box stays empty after speaking | Check the backend terminal for error messages; confirm the key in `.env` is correct |
@@ -189,32 +189,23 @@ This section explains how the automatic translation feature works.
 After you speak a sentence:
 1. Deepgram transcribes your speech and marks it as **final** (the speaker has finished a chunk).
 2. The backend detects your speaking language (`en` = English, `de` = German) from the language you selected.
-3. It calls OpenAI's `gpt-4o-mini` model to translate the sentence into the other language.
+3. It calls [LibreTranslate](https://libretranslate.com/) — a free, open-source translation API — to translate the sentence into the other language.
 4. The translation is sent back to your browser and displayed in the **Translation** panel beneath the transcript.
 
-Translation happens **in the background** — the live transcript keeps updating while you wait for OpenAI to respond. The WebSocket never freezes.
+Translation happens **in the background** — the live transcript keeps updating while you wait for the translation to come back. The WebSocket never freezes.
 
 ### Setup
 
-#### 1. Add your OpenAI API key
+No API key needed! Just make sure your Deepgram key is set and the backend is running.
 
-```bash
-export OPENAI_API_KEY="sk-your-key-here"
-```
-
-Or add it to your `.env` file (recommended):
+If you want to use a self-hosted LibreTranslate server instead of the public one, add these to your `.env`:
 
 ```
-OPENAI_API_KEY=sk-your-key-here
+LIBRETRANSLATE_URL=http://localhost:5000
+LIBRETRANSLATE_API_KEY=your_key_if_your_server_requires_one
 ```
 
-#### 2. Install the new dependency
-
-```bash
-pip install -r backend/requirements.txt
-```
-
-#### 3. Restart the backend
+#### Restart the backend
 
 ```bash
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
@@ -234,8 +225,9 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 | Problem | Solution |
 |---------|----------|
-| No translation appears | Verify `OPENAI_API_KEY` is set in `.env` and restart the backend |
-| "Translation failed" error | Check the backend terminal for the full error; confirm the key is valid |
+| No translation appears | Check the backend terminal for errors; confirm the Codespace has internet access |
+| "LibreTranslate: rate limit reached" | The free public server is busy — wait a few seconds and try again |
+| "Translation timed out" | The public LibreTranslate server is slow — try again, or self-host for faster results |
 | Wrong translation direction | Check the "Speaking language" selector matches what you are actually speaking |
 | Console shows "Unknown language" | Only `en` and `de` are supported; other languages are ignored |
 
