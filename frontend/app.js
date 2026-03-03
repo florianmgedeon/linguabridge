@@ -1,5 +1,5 @@
 /**
- * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3 + PR 4)
+ * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3 + PR 4 + PR 5)
  *
  * PR 1 responsibilities:
  *  1. Request microphone permission via getUserMedia
@@ -17,6 +17,10 @@
  *
  * PR 4 additions:
  *  9. Display EN↔DE translations returned by the backend (text only, no TTS)
+ *
+ * PR 5 additions:
+ *  10. Receive `tts_start` JSON header + binary MP3 audio from the backend
+ *  11. Play the MP3 audio immediately through the browser's audio engine
  */
 
 // Global handle to the active MediaStream.
@@ -37,6 +41,11 @@ let wsGeneration = 0;
 // Running counters shown in the UI
 let chunksSent  = 0;
 let bytesSent   = 0;
+
+// ── TTS playback state (PR 5) ────────────────────────────────────────────────
+// When the backend sends a `tts_start` JSON message, we record the metadata
+// here.  The very next binary WebSocket frame is the corresponding MP3 audio.
+let pendingTtsHeader = null;   // set by handleTtsStart(), cleared after playback
 
 // ─── DOM references ─────────────────────────────────────────────────────────
 const btnMic        = document.getElementById("btn-mic");
@@ -266,6 +275,68 @@ function handleTranslation(msg) {
   translationLogEl.appendChild(translatedLine);
 }
 
+// ─── TTS playback (PR 5) ─────────────────────────────────────────────────────
+
+/**
+ * Called when the backend sends a `tts_start` message.
+ *
+ * The backend sends:
+ *   { type: "tts_start", audio_format: "mp3", mime: "audio/mpeg",
+ *     target_lang: "en"|"de", id: <number> }
+ *
+ * We store the header so the next binary WebSocket frame can be played.
+ *
+ * @param {{ audio_format: string, mime: string, target_lang: string, id: number }} msg
+ */
+function handleTtsStart(msg) {
+  pendingTtsHeader = msg;
+}
+
+/**
+ * Called when the WebSocket delivers a binary frame (ArrayBuffer).
+ *
+ * If `pendingTtsHeader` is set, this frame is TTS audio — we convert it to
+ * a Blob URL, attach it to an Audio element, and play it immediately.
+ * The object URL is revoked once playback ends to free memory.
+ *
+ * @param {ArrayBuffer} buffer  Raw bytes of the audio file (MP3).
+ */
+function playTtsAudio(buffer) {
+  if (!pendingTtsHeader) {
+    // Binary frame arrived without a preceding tts_start — ignore it.
+    return;
+  }
+
+  const { mime, id } = pendingTtsHeader;
+  pendingTtsHeader = null;   // consume the header
+
+  const blob = new Blob([buffer], { type: mime || "audio/mpeg" });
+  const url  = URL.createObjectURL(blob);
+
+  const audio = new Audio(url);
+
+  // Route to the output device the user selected (if the browser supports it).
+  const outputDeviceId = selectOutput.value;
+  if (outputDeviceId && typeof audio.setSinkId === "function") {
+    audio.setSinkId(outputDeviceId).catch(err => {
+      // setSinkId can fail if the device is no longer available; ignore it.
+      console.warn(`TTS setSinkId failed: ${err.message}`);
+    });
+  }
+
+  audio.addEventListener("ended",  () => URL.revokeObjectURL(url));
+  audio.addEventListener("error",  () => {
+    console.warn(`TTS audio (id=${id}) failed to play`);
+    URL.revokeObjectURL(url);
+  });
+
+  audio.play().catch(err => {
+    // Autoplay can be blocked by the browser if no user gesture has occurred.
+    console.warn(`TTS autoplay blocked (id=${id}): ${err.message}`);
+    URL.revokeObjectURL(url);
+  });
+}
+
 // ─── Streaming (PR 2) ────────────────────────────────────────────────────────
 
 /**
@@ -293,6 +364,9 @@ function startStreaming() {
   // Reset translation display for the new session.
   translationLogEl.innerHTML = "";
   translationPlaceholder.style.display = "";
+
+  // Reset TTS state for the new session.
+  pendingTtsHeader = null;
 
   // Read the selected language and append it as a query parameter so the
   // backend knows which language to tell Deepgram to transcribe.
@@ -334,12 +408,21 @@ function startStreaming() {
   // Handle messages sent back by the backend (transcripts from Deepgram)
   socket.addEventListener("message", (event) => {
     if (wsGeneration !== myGen) return;
+
+    // Binary frame → TTS audio bytes
+    if (event.data instanceof ArrayBuffer) {
+      playTtsAudio(event.data);
+      return;
+    }
+
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "transcript") {
         handleTranscript(msg);
       } else if (msg.type === "translation") {
         handleTranslation(msg);
+      } else if (msg.type === "tts_start") {
+        handleTtsStart(msg);
       } else if (msg.type === "translation_error") {
         // Show translation failures as a subtle notice in the translation panel.
         // We deliberately do NOT touch the transcript box here.
