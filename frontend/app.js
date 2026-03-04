@@ -1,5 +1,5 @@
 /**
- * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3 + PR 4 + PR 5)
+ * LinguaBridge – frontend audio setup (PR 1 + PR 2 + PR 3 + PR 4 + PR 5 + PR 6 + PR 7)
  *
  * PR 1 responsibilities:
  *  1. Request microphone permission via getUserMedia
@@ -25,6 +25,10 @@
  *  11. Language is now detected automatically — no manual language selector
  *  12. Show a "Detected language: DE / EN" indicator that updates in real-time
  *  13. Prefix each final transcript line with [DE] or [EN]
+ *
+ * PR 7 additions:
+ *  14. Stereo panning for TTS: English plays on the LEFT ear, German on the RIGHT
+ *      Uses the Web Audio API with a StereoPannerNode (pan: EN = -1, DE = +1)
  */
 
 // Global handle to the active MediaStream.
@@ -46,15 +50,19 @@ let wsGeneration = 0;
 let chunksSent  = 0;
 let bytesSent   = 0;
 
-// ── TTS playback state (PR 5) ────────────────────────────────────────────────
+// ── TTS playback state (PR 5 + PR 7) ────────────────────────────────────────
 // When the backend sends a `tts_start` JSON message, we record the metadata
 // here.  The very next binary WebSocket frame is the corresponding MP3 audio.
 let pendingTtsHeader = null;   // set by handleTtsStart(), cleared after playback
 
 // Queue of pending TTS clips so they play sequentially without overlap.
-// Each entry: { buffer: ArrayBuffer, mime: string, id: number }
+// Each entry: { buffer: ArrayBuffer, mime: string, id: number, targetLang: string }
 const ttsQueue     = [];
 let   ttsPlaying   = false;   // true while an Audio element is playing
+
+// Shared AudioContext for stereo panning (PR 7).
+// Lazily created on first TTS clip to avoid autoplay-policy issues.
+let audioCtx = null;
 
 // ─── DOM references ─────────────────────────────────────────────────────────
 const btnMic        = document.getElementById("btn-mic");
@@ -333,51 +341,95 @@ function playTtsAudio(buffer) {
   }
 
   const { mime, id } = pendingTtsHeader;
+  const targetLang = (pendingTtsHeader.target_lang || "").toLowerCase();
   pendingTtsHeader = null;   // consume the header
 
-  ttsQueue.push({ buffer, mime, id });
+  ttsQueue.push({ buffer, mime, id, targetLang });
   drainTtsQueue();
 }
 
 /**
  * Starts the next queued TTS clip if none is currently playing.
  * Each clip waits for the previous one to finish before starting.
+ *
+ * PR 7 — Stereo Panning:
+ *   English (EN) → LEFT  ear  (StereoPanner pan = -1)
+ *   German  (DE) → RIGHT ear  (StereoPanner pan = +1)
+ *
+ * How it works (in plain terms):
+ *   1. We decode the raw MP3 bytes into audio samples using the Web Audio API.
+ *   2. We create a StereoPannerNode — think of it as a balance knob:
+ *      -1 means full left, 0 means centre, +1 means full right.
+ *   3. We chain: decoded audio source → panner → speakers.
+ *   4. The selected output device routing (setSinkId) is kept for the fallback
+ *      path so the feature still degrades gracefully when the Web Audio API is
+ *      unavailable.
  */
 function drainTtsQueue() {
   if (ttsPlaying || ttsQueue.length === 0) return;
 
   ttsPlaying = true;
-  const { buffer, mime, id } = ttsQueue.shift();
+  const { buffer, mime, id, targetLang } = ttsQueue.shift();
 
-  const blob  = new Blob([buffer], { type: mime || "audio/mpeg" });
-  const url   = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-
-  // Route to the output device the user selected (if the browser supports it).
-  const outputDeviceId = selectOutput.value;
-  if (outputDeviceId && typeof audio.setSinkId === "function") {
-    audio.setSinkId(outputDeviceId).catch(err => {
-      console.warn(`TTS setSinkId failed: ${err.message}`);
-    });
+  // Lazily create the AudioContext the first time we need it.
+  // Creating it earlier can trigger browser autoplay warnings.
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 
+  // pan: EN → -1 (left), DE → +1 (right), anything else → 0 (centre)
+  const pan = targetLang === "en" ? -1 : targetLang === "de" ? 1 : 0;
+
   const onDone = () => {
-    URL.revokeObjectURL(url);
     ttsPlaying = false;
     drainTtsQueue();   // play the next clip in the queue
   };
 
-  audio.addEventListener("ended", onDone);
-  audio.addEventListener("error", () => {
-    console.warn(`TTS audio (id=${id}) failed to play`);
-    onDone();
-  });
+  // Decode the raw MP3 bytes into a PCM AudioBuffer, then play it through
+  // a StereoPannerNode so the audio lands in the correct ear.
+  audioCtx.decodeAudioData(
+    buffer,
+    (decoded) => {
+      const source = audioCtx.createBufferSource();
+      source.buffer = decoded;
 
-  audio.play().catch(err => {
-    // Autoplay can be blocked by the browser if no user gesture has occurred.
-    console.warn(`TTS autoplay blocked (id=${id}): ${err.message}`);
-    onDone();
-  });
+      const panner = audioCtx.createStereoPanner();
+      panner.pan.value = pan;
+
+      // source → panner → output (speakers / headphones)
+      source.connect(panner);
+      panner.connect(audioCtx.destination);
+
+      source.addEventListener("ended", onDone);
+      source.start(0);
+    },
+    (err) => {
+      // Decoding failed — fall back to a plain Audio element (no panning)
+      console.warn(`TTS Web Audio decode failed (id=${id}), falling back: ${err}`);
+
+      const blob  = new Blob([buffer], { type: mime || "audio/mpeg" });
+      const url   = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+
+      const outputDeviceId = selectOutput.value;
+      if (outputDeviceId && typeof audio.setSinkId === "function") {
+        audio.setSinkId(outputDeviceId).catch(e => {
+          console.warn(`TTS setSinkId failed: ${e.message}`);
+        });
+      }
+
+      const cleanup = () => { URL.revokeObjectURL(url); onDone(); };
+      audio.addEventListener("ended", cleanup);
+      audio.addEventListener("error", () => {
+        console.warn(`TTS audio (id=${id}) failed to play`);
+        cleanup();
+      });
+      audio.play().catch(e => {
+        console.warn(`TTS autoplay blocked (id=${id}): ${e.message}`);
+        cleanup();
+      });
+    }
+  );
 }
 
 // ─── Streaming (PR 2) ────────────────────────────────────────────────────────
