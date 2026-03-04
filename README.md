@@ -104,16 +104,16 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 
 1. Click **Enable Microphone** — the browser will ask for permission. Click *Allow*.
 2. The status indicator changes to **Mic: granted ✓** and the **Start Streaming** button becomes clickable.
-3. Select your speaking language: **English** or **Deutsch (German)**.
-4. Click **Start Streaming**.
+3. Click **Start Streaming**.
    - The **WS** badge turns green: **WS: connected ✓**
    - The **Streaming** badge shows **Streaming: on 🔴**
-5. Start talking — you will see words appear live in the **Live Transcript** box:
+4. Start talking — you will see words appear live in the **Live Transcript** box:
    - *Grey/italic* text = Deepgram's best guess while you're still speaking
-   - **Black** text = finalised words (Deepgram is confident)
-6. After each finalised sentence, the **Translation** panel below will show:
+   - **Black** text = finalised words (Deepgram is confident), prefixed with `[DE]` or `[EN]`
+5. After each finalised sentence, the **Translation** panel below will show:
    - The original text labelled with its language, e.g. `[DE] Guten Morgen.`
    - The translated text labelled with the target language, e.g. `[EN] Good morning.`
+6. The **"Detected language"** badge updates automatically each time a final transcript arrives.
 7. Click **Stop Streaming** when done.
 
 ---
@@ -169,18 +169,61 @@ Back in the **Ports** tab, find **port 3000**, make it **Public**, and open it i
 | Symptom | Fix |
 |---|---|
 | Red error in transcript box: *DEEPGRAM_API_KEY is not set* | Create `.env` from `.env.example` and add your key, then restart the backend |
-| "Translation failed" in translation panel | MyMemory server may be temporarily unavailable — try again in a moment |
-| "Translation rate limit reached" | The MyMemory server throttled your requests — wait a few seconds and retry |
-| Translation panel stays empty | Check the backend terminal for errors; MyMemory requires an internet connection from your Codespace |
-| Wrong translation direction | Check the "Speaking language" selector — it controls which language Deepgram expects |
-| `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
+| "Translation failed" in translation panel | The translation service may be temporarily unavailable — try again in a moment |
+| "Translation rate limit reached" | The translation server throttled your requests — wait a few seconds and retry |
+| Translation panel stays empty | Check the backend terminal for errors; the translation service requires an internet connection from your Codespace |
 | Transcript box stays empty after speaking | Check the backend terminal for error messages; confirm the key in `.env` is correct |
+| "Detected language" badge shows wrong language | Try a longer sentence (8+ characters); very short utterances fall back to the last confirmed language |
+| `bash: cd: frontend: No such file or directory` | You're already inside the `frontend/` folder — just run `python3 -m http.server 3000` |
 | WS error badge | The backend is not running, or port 8000 is not set to Public in Codespaces |
 | Mic denied | Refresh the page and click *Allow* when the browser asks for microphone permission |
 
 ---
 
-## PR4 — Translation (English ↔ German)
+## PR6 — Automatic Language Detection
+
+LinguaBridge now automatically detects whether the speaker is using **German** or **English**. There is no longer any need to manually select the language before you start speaking.
+
+### How it works (plain English)
+
+1. When you start streaming, the browser sends your microphone audio to the FastAPI backend.
+2. The backend forwards the audio to Deepgram with **`detect_language=true`** enabled.  This tells Deepgram to figure out on its own which language is being spoken — you do not need to tell it.
+3. Deepgram returns each finalised chunk of speech together with the language it detected (e.g. `"en"`, `"de-DE"`).
+4. The backend normalises the code to `"en"` or `"de"` and applies a **stability policy** to avoid jittery direction changes on very short utterances (e.g. "OK", "ja"):
+   - If the detected language is reliable **and** the transcript is at least 8 characters or 2 words → the new language is confirmed.
+   - Otherwise → the last confirmed language is kept.
+5. The translation direction is set automatically:
+   - German detected → translate to English
+   - English detected → translate to German
+6. The UI shows a **"Detected language: DE / EN"** badge that updates after each final transcript, and each transcript line is prefixed with `[DE]` or `[EN]`.
+
+### How to test
+
+1. Start the backend: `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
+2. Open the frontend at `http://localhost:3000` (or your Codespace URL).
+3. Click **Enable Microphone** → grant permission.
+4. Click **Start Streaming**.
+5. Speak a German sentence (e.g. *"Guten Morgen, wie geht es Ihnen?"*).
+   - The transcript appears prefixed with `[DE]`.
+   - The "Detected language" badge shows **DE**.
+   - An English translation appears in the Translation panel.
+6. Speak an English sentence (e.g. *"Good morning, how are you?"*).
+   - The transcript appears prefixed with `[EN]`.
+   - The "Detected language" badge shows **EN**.
+   - A German translation appears in the Translation panel.
+7. Observe the detected language indicator change dynamically as you switch languages.
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Translation direction is wrong | Check the backend terminal — look for lines like `Deepgram detected language: 'en'`. If detection looks incorrect, try speaking more clearly or using a longer sentence. |
+| Detected language badge always shows "—" | Make sure the backend is running with the latest code; the feature requires `detect_language=true` in the Deepgram URL. |
+| Translation panel stays empty | Ensure the backend has internet access and the Deepgram/OpenAI keys are set correctly. |
+
+---
+
+
 
 This section explains how the automatic translation feature works.
 
@@ -231,9 +274,9 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 | Method    | Path        | Description |
 |-----------|-------------|-------------|
 | GET       | `/`         | Health-check: `{"status": "LinguaBridge running"}` |
-| WebSocket | `/ws/audio?lang=en` | Receives binary audio; forwards to Deepgram; replies with `{"type":"transcript",...}` or `{"type":"error",...}` |
+| WebSocket | `/ws/audio` | Receives binary audio; forwards to Deepgram with automatic language detection; replies with `{"type":"transcript",...}` or `{"type":"error",...}` |
 
-Supported `lang` values: `en` (English), `de` (German).
+Language is detected automatically — no query parameters are required.
 
 ---
 
