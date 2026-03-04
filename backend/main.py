@@ -81,22 +81,24 @@ async def audio_stream(websocket: WebSocket):
 
     What this endpoint does (step by step):
     1. Accepts the WebSocket connection from the browser.
-    2. Opens a second WebSocket connection to Deepgram's cloud STT service
-       with automatic language detection enabled.
-    3. Every audio chunk the browser sends is forwarded to Deepgram.
-    4. Deepgram replies with live transcripts (partial + final) including
-       the detected language for each final chunk.
-    5. The detected language is normalised to "en" or "de" and used to
-       set the translation direction automatically (de→en or en→de).
-    6. Transcripts and translations are sent back to the browser as JSON.
+    2. Opens TWO parallel WebSocket connections to Deepgram — one with
+       language=de (German acoustic model) and one with language=en (English
+       acoustic model).  Both receive identical audio chunks.
+    3. For each utterance, the connection whose final transcript has higher
+       confidence wins.  The winner determines both the transcript text and
+       the detected language.
+    4. The detected language is used to set the translation direction
+       automatically (de→en or en→de).
+    5. Transcripts and translations are sent back to the browser as JSON.
     """
     await websocket.accept()
 
     logger.info("WebSocket connection opened")
 
-    # Per-connection language state.  Starts as "en" so the very first
-    # utterance always produces a translation even if detection is uncertain.
-    last_confirmed_language = "en"
+    # Per-connection language state.  Starts as "de" because the user
+    # primarily speaks German; the dual-connection confidence race will
+    # quickly override this for English utterances.
+    last_confirmed_language = "de"
 
     # Fail fast and visibly if the API key is not configured.
     # The browser will show this message in the transcript panel.
@@ -235,10 +237,11 @@ async def audio_stream(websocket: WebSocket):
         """
         Send a Deepgram transcript event back to the browser.
 
-        For final (is_final=True) transcripts we also:
-        - Determine the confirmed language using Deepgram's detected language
-          and a stability policy (short/unclear utterances keep the last known
-          language rather than switching).
+        For speech_final (is_final=True, speech_final=True) transcripts we also:
+        - Read the detected language set by the dual-connection confidence race
+          in deepgram_streaming.py (always "de" or "en").
+        - Apply a light stability guard so very short single-word utterances
+          ("ja", "OK") don't flip the confirmed language unnecessarily.
         - Kick off a background translation task so the WebSocket receive loop
           is never blocked.
         """
